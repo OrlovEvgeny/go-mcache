@@ -6,6 +6,11 @@
 go-mcache - this is a fast key:value storage
 Its major advantage is that, being essentially a thread-safe map[string]interface{} with expiration times, it doesn't need to serialize, and quick removal of expired keys
 
+# Installation
+
+```bash
+~ $ go get github.com/OrlovEvgeny/go-mcache
+
 
 
 **Example a Pointer value (vary fast method)**
