@@ -105,18 +105,10 @@ func (mc *CacheDriver) Len() int {
 
 //
 func encodeBytes(value interface{}) ([]byte, error) {
-	buf, err := msgpack.Marshal(value)
-	if err != nil {
-		return buf, err
-	}
-	return buf, err
+	return msgpack.Marshal(value)
 }
 
 //
 func decodeBytes(buf []byte, value interface{}) error {
-	err := msgpack.Unmarshal(buf, value)
-	if err != nil {
-		return err
-	}
-	return nil
+	return msgpack.Unmarshal(buf, value)
 }
