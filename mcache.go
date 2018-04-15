@@ -1,7 +1,7 @@
 package go_mcache
 
 import (
-	safemap "./safeMap"
+	safemap "safeMap"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
