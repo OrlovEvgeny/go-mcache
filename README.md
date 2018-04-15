@@ -10,6 +10,7 @@ Its major advantage is that, being essentially a thread-safe map[string]interfac
 
 ```bash
 ~ $ go get github.com/OrlovEvgeny/go-mcache
+```
 
 
 
