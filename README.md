@@ -82,6 +82,8 @@ func main() {
 ```
 
 
+*dependency use*: github.com/vmihailenco/msgpack
+
 # License:
 
 [MIT](LICENSE)
