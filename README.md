@@ -28,7 +28,7 @@ func main() {
 	user.Name = "John"
 	user.Age = 20
 	user.Bio = "gopher"
-	
+	//args - key, &value, ttl
 	MCache.SetPointer(key, user, time.Minute*20)
 	if err != nil {
 		log.Println("MCACHE SET ERROR: ", err)
@@ -66,6 +66,7 @@ func main() {
 	userSet.Age = 20
 	userSet.Bio = "gopher"
 	
+	//args - key, &value, ttl
 	MCache.Set(key, userSet, time.Minute*20)
 	if err != nil {
 		log.Println("MCACHE SET ERROR: ", err)
