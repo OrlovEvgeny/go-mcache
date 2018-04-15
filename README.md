@@ -1,4 +1,7 @@
-#MCache library
+# MCache library
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
+[![GoDoc](https://godoc.org/github.com/OrlovEvgeny/go-mcache?status.svg)](https://godoc.org/github.com/OrlovEvgeny/go-mcache)
 
 go-mcache - this is a fast key:value storage
 Its major advantage is that, being essentially a thread-safe map[string]interface{} with expiration times, it doesn't need to serialize, and quick removal of expired keys

@@ -1,33 +1,33 @@
 package go_mcache
 
 import (
+	"log"
 	"testing"
 	"time"
-	"log"
 )
 
 var (
-	mcache *CacheDriver
+	mcache  *CacheDriver
 	dataSet = new(TestData)
-	key1 = "keystr1"
-	key2 = "keystr2"
+	key1    = "keystr1"
+	key2    = "keystr2"
 )
 
 type TestData struct {
-	ID int
+	ID   int
 	Name string
-	Age int
+	Age  int
 }
 
 //Set cache
-func TestSet(t *testing.T)  {
+func TestSet(t *testing.T) {
 	mcache = StartInstance()
 
 	dataSet.Name = "John"
 	dataSet.ID = 11
 	dataSet.Age = 24
 
-	err := mcache.Set(key1, dataSet, time.Minute * 2)
+	err := mcache.Set(key1, dataSet, time.Minute*2)
 	if err != nil {
 		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
 	}
@@ -35,7 +35,7 @@ func TestSet(t *testing.T)  {
 }
 
 //Get cache
-func TestGet(t *testing.T)  {
+func TestGet(t *testing.T) {
 	var dataGet TestData
 	if ok := mcache.Get(key1, &dataGet); ok {
 		if dataGet.Name != dataSet.Name {
@@ -49,8 +49,8 @@ func TestGet(t *testing.T)  {
 }
 
 //Set cache Pointer data
-func TestSetPointer(t *testing.T)  {
-	err := mcache.SetPointer(key2, dataSet, time.Minute * 2)
+func TestSetPointer(t *testing.T) {
+	err := mcache.SetPointer(key2, dataSet, time.Minute*2)
 	if err != nil {
 		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
 	}
@@ -58,7 +58,7 @@ func TestSetPointer(t *testing.T)  {
 }
 
 //Get cache Pointer
-func TestGetPointer(t *testing.T)  {
+func TestGetPointer(t *testing.T) {
 	if pointer, ok := mcache.GetPointer(key2); ok {
 		if obj, ok := pointer.(*TestData); ok {
 			if obj.Age != dataSet.Age {
@@ -72,7 +72,7 @@ func TestGetPointer(t *testing.T)  {
 }
 
 //Get Len cache
-func TestLen(t *testing.T)  {
+func TestLen(t *testing.T) {
 	if mcache.Len() != 2 {
 		t.Errorf("Cache %s incorect by key", t.Name())
 	}
@@ -80,7 +80,7 @@ func TestLen(t *testing.T)  {
 }
 
 //Remove two key
-func TestRemove(t *testing.T)  {
+func TestRemove(t *testing.T) {
 	mcache.Remove(key2)
 	mcache.Remove(key1)
 	if mcache.Len() != 0 {
