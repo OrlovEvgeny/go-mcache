@@ -34,42 +34,43 @@ type CacheDriver struct{}
 
 //
 func StartInstance() *CacheDriver {
-	if !loadInstance {
-		initStore()
-		instance = new(CacheDriver)
-		loadInstance = true
+	if loadInstance {
 		return instance
 	}
+	initStore()
+	instance = new(CacheDriver)
+	loadInstance = true
 	return instance
 }
 
 //
 func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
-	if ok {
-		item := data.(Item)
-		if isExpire(item.Expire) {
-			return false
-		}
-		err := decodeBytes(item.Data, struc)
-		if err != nil {
-			log.Fatal("error Decoding bytes cache data: ", err)
-		}
-		return true
+	if !ok {
+		return false
 	}
-	return false
+	item := data.(Item)
+	if isExpire(item.Expire) {
+		return false
+	}
+	err := decodeBytes(item.Data, struc)
+	if err != nil {
+		log.Fatal("error Decoding bytes cache data: ", err)
+	}
+	return true
 }
 
 //
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
-	if data, ok := storage.Find(key); ok {
-		item := data.(Item)
-		if isExpire(item.Expire) {
-			return Item{}.DataLink, false
-		}
-		return item.DataLink, true
+	data, ok := storage.Find(key)
+	if !ok {
+		return Item{}.DataLink, false
 	}
-	return Item{}.DataLink, false
+	item := data.(Item)
+	if isExpire(item.Expire) {
+		return Item{}.DataLink, false
+	}
+	return item.DataLink, true
 }
 
 //
