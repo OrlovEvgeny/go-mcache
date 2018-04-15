@@ -43,5 +43,4 @@ func heartBeatGC(ks *keyset) {
 func expired(key string, duration time.Duration) {
 	<-time.After(duration)
 	keyChan <- key
-	return
 }
