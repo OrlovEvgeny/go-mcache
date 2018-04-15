@@ -82,7 +82,7 @@ func main() {
 ```
 
 
-*dependency use*: github.com/vmihailenco/msgpack
+*dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
 
 # License:
 
