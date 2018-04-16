@@ -94,8 +94,18 @@ func (mc *CacheDriver) Remove(key string) {
 }
 
 //
+func (mc *CacheDriver) Truncate() {
+	storage.Truncate()
+}
+
+//
 func (mc *CacheDriver) Len() int {
 	return storage.Len()
+}
+
+//
+func (mc *CacheDriver) GCBufferQueue() int {
+	return len(gcmap.KeyChan)
 }
 
 //

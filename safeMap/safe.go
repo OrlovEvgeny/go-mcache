@@ -25,6 +25,7 @@ const (
 	FIND
 	INSERT
 	COUNT
+	TRUNCATE
 	END
 )
 
@@ -38,6 +39,7 @@ type findResult struct {
 type SafeMap interface {
 	Insert(string, interface{})
 	Delete(string)
+	Truncate()
 	Flush([]string)
 	Find(string) (interface{}, bool)
 	Len() int
@@ -67,6 +69,8 @@ func (sm safeMap) run() {
 			command.result <- findResult{value, found}
 		case COUNT:
 			command.result <- len(store)
+		case TRUNCATE:
+			clearMap(store)
 		case END:
 			close(sm)
 			command.data <- store
@@ -109,6 +113,18 @@ func (sm safeMap) Close() map[string]interface{} {
 	reply := make(chan map[string]interface{})
 	sm <- commandData{action: END, data: reply}
 	return <-reply
+}
+
+//
+func (sm safeMap) Truncate() {
+	sm <- commandData{action: TRUNCATE}
+}
+
+//
+func clearMap(store map[string]interface{}) {
+	for k := range store {
+		delete(store, k)
+	}
 }
 
 //
