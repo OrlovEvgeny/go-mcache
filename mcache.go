@@ -2,31 +2,26 @@ package go_mcache
 
 import (
 	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
+	gcmap "./gcmap"
+	item "github.com/OrlovEvgeny/go-mcache/item"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
 )
 
-//
-type Item struct {
-	Key      string
-	Expire   time.Time
-	Data     []byte
-	DataLink interface{}
-}
 
 //
 var (
 	storage      safemap.SafeMap
+	gc			 *gcmap.GC
 	instance     *CacheDriver
 	loadInstance = false
-	keyChan      = make(chan string, 1000)
 )
 
 //
 func initStore() {
-	storage = safemap.New()
-	go expireKey(keyChan)
+	storage = safemap.NewStorage()
+	gc = gcmap.NewGC(storage)
 }
 
 //
@@ -48,7 +43,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if ok {
 		item := data.(Item)
-		if isExpire(item.Expire) {
+		if gcmap.IsExpire(item.Expire) {
 			return false
 		}
 		err := decodeBytes(item.Data, struc)
@@ -64,7 +59,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	if data, ok := storage.Find(key); ok {
 		item := data.(Item)
-		if isExpire(item.Expire) {
+		if gcmap.IsExpire(item.Expire) {
 			return Item{}.DataLink, false
 		}
 		return item.DataLink, true
@@ -75,7 +70,7 @@ func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 //
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go expired(key, ttl)
+	go gc.Expired(key, ttl)
 	v, err := encodeBytes(value)
 	if err != nil {
 		log.Println("MCACHE SET ERROR: ", err)
@@ -88,7 +83,7 @@ func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) err
 //
 func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go expired(key, ttl)
+	go gc.Expired(key, ttl)
 	storage.Insert(key, Item{Key: key, Expire: expire, DataLink: value})
 	return nil
 }

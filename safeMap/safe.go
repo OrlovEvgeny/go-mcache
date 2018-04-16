@@ -1,5 +1,10 @@
 package safeMap
 
+import (
+	item "github.com/OrlovEvgeny/go-mcache/item"
+	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
+)
+
 //
 type safeMap chan commandData
 
@@ -41,7 +46,7 @@ type SafeMap interface {
 }
 
 //
-func New() SafeMap {
+func NewStorage() SafeMap {
 	sm := make(safeMap)
 	go sm.run()
 	return sm
@@ -57,7 +62,7 @@ func (sm safeMap) run() {
 		case REMOVE:
 			delete(store, command.key)
 		case FLUSH:
-			flush(&store, command.keys)
+			flush(store, command.keys)
 		case FIND:
 			value, found := store[command.key]
 			command.result <- findResult{value, found}
@@ -98,8 +103,15 @@ func (sm safeMap) Len() int {
 }
 
 //
-func flush(s *map[string]interface{}, keys []string) {
+func flush(s map[string]interface{}, keys []string) {
 	for _, v := range keys {
-		delete(*s, v)
+		value, ok := s[v]
+		if !ok {
+			continue
+		}
+
+		if gcmap.IsExpire(value.(item.Item).Expire) {
+			delete(s, v)
+		}
 	}
 }
