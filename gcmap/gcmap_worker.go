@@ -3,7 +3,7 @@ package gcmap
 import (
 	"sync"
 	"time"
-	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
+	safemap "gopkg.in/OrlovEvgeny/go-mcache.v1/safeMap"
 )
 
 
@@ -38,11 +38,6 @@ func NewGC(store safemap.SafeMap ) *GC {
 	loadInstance = true
 
 	return gc
-}
-
-// check expire cache
-func IsExpire(t time.Time) bool {
-	return t.Before(time.Now().Local())
 }
 
 //

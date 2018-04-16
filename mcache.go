@@ -1,9 +1,9 @@
 package go_mcache
 
 import (
-	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
-	gcmap "./gcmap"
-	item "github.com/OrlovEvgeny/go-mcache/item"
+	safemap "gopkg.in/OrlovEvgeny/go-mcache.v1/safeMap"
+	gcmap "gopkg.in/OrlovEvgeny/go-mcache.v1/gcmap"
+	."gopkg.in/OrlovEvgeny/go-mcache.v1/item"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
@@ -43,7 +43,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if ok {
 		item := data.(Item)
-		if gcmap.IsExpire(item.Expire) {
+		if IsExpire(item.Expire) {
 			return false
 		}
 		err := decodeBytes(item.Data, struc)
@@ -59,7 +59,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	if data, ok := storage.Find(key); ok {
 		item := data.(Item)
-		if gcmap.IsExpire(item.Expire) {
+		if IsExpire(item.Expire) {
 			return Item{}.DataLink, false
 		}
 		return item.DataLink, true

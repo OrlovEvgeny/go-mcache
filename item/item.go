@@ -9,3 +9,9 @@ type Item struct {
 	Data     []byte
 	DataLink interface{}
 }
+
+
+// check expire cache
+func IsExpire(t time.Time) bool {
+	return t.Before(time.Now().Local())
+}
