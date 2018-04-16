@@ -89,3 +89,8 @@ func TestRemove(t *testing.T) {
 	log.Printf("%s : OK\n", t.Name())
 
 }
+
+func TestClose(t *testing.T) {
+	mcache.Close()
+	log.Printf("%s : OK\n", t.Name())
+}

@@ -25,6 +25,7 @@ const (
 	FIND
 	INSERT
 	COUNT
+	END
 )
 
 //
@@ -40,6 +41,7 @@ type SafeMap interface {
 	Flush([]string)
 	Find(string) (interface{}, bool)
 	Len() int
+	Close() map[string]interface{}
 }
 
 //
@@ -65,6 +67,9 @@ func (sm safeMap) run() {
 			command.result <- findResult{value, found}
 		case COUNT:
 			command.result <- len(store)
+		case END:
+			close(sm)
+			command.data <- store
 		}
 	}
 }
@@ -97,6 +102,13 @@ func (sm safeMap) Len() int {
 	reply := make(chan interface{})
 	sm <- commandData{action: COUNT, result: reply}
 	return (<-reply).(int)
+}
+
+//
+func (sm safeMap) Close() map[string]interface{} {
+	reply := make(chan map[string]interface{})
+	sm <- commandData{action: END, data: reply}
+	return <-reply
 }
 
 //

@@ -99,6 +99,13 @@ func (mc *CacheDriver) Len() int {
 }
 
 //
+func (mc *CacheDriver) Close() map[string]interface{} {
+	loadInstance = false
+	gcmap.GCStop()
+	return storage.Close()
+}
+
+//
 func encodeBytes(value interface{}) ([]byte, error) {
 	return msgpack.Marshal(value)
 }
