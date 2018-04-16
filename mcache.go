@@ -42,7 +42,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if !ok {
 		return false
-  }
+	}
 	item := data.(entity.Item)
 	if entity.IsExpire(item.Expire) {
 		return false
@@ -56,9 +56,9 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 
 //
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
-  data, ok := storage.Find(key); ok
-  if !ok {
-		return Item{}.DataLink, false
+	data, ok := storage.Find(key)
+	if !ok {
+		return entity.Item{}.DataLink, false
 	}
 	item := data.(entity.Item)
 	if entity.IsExpire(item.Expire) {
