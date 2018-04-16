@@ -2,31 +2,26 @@ package go_mcache
 
 import (
 	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
+	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
+	entity "github.com/OrlovEvgeny/go-mcache/item"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
 )
 
-//
-type Item struct {
-	Key      string
-	Expire   time.Time
-	Data     []byte
-	DataLink interface{}
-}
 
 //
 var (
 	storage      safemap.SafeMap
+	gc			 *gcmap.GC
 	instance     *CacheDriver
 	loadInstance = false
-	keyChan      = make(chan string, 1000)
 )
 
 //
 func initStore() {
-	storage = safemap.New()
-	go expireKey(keyChan)
+	storage = safemap.NewStorage()
+	gc = gcmap.NewGC(storage)
 }
 
 //
@@ -47,8 +42,8 @@ func StartInstance() *CacheDriver {
 func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if ok {
-		item := data.(Item)
-		if isExpire(item.Expire) {
+		item := data.(entity.Item)
+		if entity.IsExpire(item.Expire) {
 			return false
 		}
 		err := decodeBytes(item.Data, struc)
@@ -63,33 +58,33 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 //
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	if data, ok := storage.Find(key); ok {
-		item := data.(Item)
-		if isExpire(item.Expire) {
-			return Item{}.DataLink, false
+		item := data.(entity.Item)
+		if entity.IsExpire(item.Expire) {
+			return entity.Item{}.DataLink, false
 		}
 		return item.DataLink, true
 	}
-	return Item{}.DataLink, false
+	return entity.Item{}.DataLink, false
 }
 
 //
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go expired(key, ttl)
+	go gc.Expired(key, ttl)
 	v, err := encodeBytes(value)
 	if err != nil {
 		log.Println("MCACHE SET ERROR: ", err)
 		return err
 	}
-	storage.Insert(key, Item{Key: key, Expire: expire, Data: v})
+	storage.Insert(key, entity.Item{Key: key, Expire: expire, Data: v})
 	return nil
 }
 
 //
 func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go expired(key, ttl)
-	storage.Insert(key, Item{Key: key, Expire: expire, DataLink: value})
+	go gc.Expired(key, ttl)
+	storage.Insert(key, entity.Item{Key: key, Expire: expire, DataLink: value})
 	return nil
 }
 
