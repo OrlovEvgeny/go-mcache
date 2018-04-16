@@ -10,7 +10,6 @@ type Item struct {
 	DataLink interface{}
 }
 
-
 // check expire cache
 func IsExpire(t time.Time) bool {
 	return t.Before(time.Now().Local())

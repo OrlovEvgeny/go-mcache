@@ -1,19 +1,18 @@
 package go_mcache
 
 import (
-	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
 	entity "github.com/OrlovEvgeny/go-mcache/item"
+	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
 )
 
-
 //
 var (
 	storage      safemap.SafeMap
-	gc			 *gcmap.GC
+	gc           *gcmap.GC
 	instance     *CacheDriver
 	loadInstance = false
 )

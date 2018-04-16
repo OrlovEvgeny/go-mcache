@@ -1,18 +1,16 @@
 package gcmap
 
 import (
+	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 	"sync"
 	"time"
-	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 )
-
 
 var (
-	KeyChan = make(chan string, 10000)
-	gcInstance *GC
+	KeyChan      = make(chan string, 10000)
+	gcInstance   *GC
 	loadInstance = false
 )
-
 
 //
 type keyset struct {
@@ -26,7 +24,7 @@ type GC struct {
 }
 
 //
-func NewGC(store safemap.SafeMap ) *GC {
+func NewGC(store safemap.SafeMap) *GC {
 	if loadInstance {
 		return gcInstance
 	}
