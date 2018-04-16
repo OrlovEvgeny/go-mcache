@@ -13,7 +13,7 @@ with expiration times, it doesn't need to serialize, and quick removal of expire
 # Installation
 
 ```bash
-~ $ go get github.com/OrlovEvgeny/go-mcache
+~ $ go get -u github.com/OrlovEvgeny/go-mcache
 ```
 
 
@@ -98,7 +98,7 @@ func main() {
 
 ### What should be done
 
-- [ ] the possibility of closing
+- [x] the possibility of closing
 - [ ] r/w benchmark statistics
 - [ ] rejection of channels in safeMap in favor of sync.Mutex (there is an opinion that it will be faster)
 
