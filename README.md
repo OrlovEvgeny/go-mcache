@@ -21,35 +21,46 @@ with expiration times, it doesn't need to serialize, and quick removal of expire
 **Example a Pointer value (vary fast method)**
 
 ```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	mcache "github.com/OrlovEvgeny/go-mcache"
+)
+
 var MCache *mcache.CacheDriver
 
-type User {
+type User struct {
 	Name string
-	Age uint
-	Bio string
+	Age  uint
+	Bio  string
 }
 
 func main() {
 	MCache = mcache.StartInstance()
-	
+
 	key := "key1"
-	
-	user := new(User)
-	user.Name = "John"
-	user.Age = 20
-	user.Bio = "gopher"
-	//args - key, &value, ttl
-	MCache.SetPointer(key, user, time.Minute*20)
-	if err != nil {
-		log.Println("MCACHE SET ERROR: ", err)
+
+	user := &User{
+		Name: "John",
+		Age:  20,
+		Bio:  "gopher",
 	}
-	
-	if pointer, ok := mcache.GetPointer(key); ok {
+	//args - key, &value, ttl
+	err := MCache.SetPointer(key, user, time.Minute*20)
+	if err != nil {
+		log.Println("MCACHE SET ERROR:", err)
+	}
+
+	if pointer, ok := MCache.GetPointer(key); ok {
 		if objUser, ok := pointer.(*User); ok {
-			fmt.Printf("User name: %s, Age: %d, Bio: %s\n", objUser.Name, objUser.Age, objUser,Bio)
+			fmt.Printf("User name: %s, Age: %d, Bio: %s\n", objUser.Name, objUser.Age, objUser.Bio)
 		}
 	} else {
-		log.Println("Cache by key: %s not found", key)
+		log.Printf("Cache by key: %s not found\n", key)
 	}
 }
 ```
@@ -57,38 +68,48 @@ func main() {
 
 
 **Example serialize and deserialize value**
+
 ```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	mcache "github.com/OrlovEvgeny/go-mcache"
+)
+
 var MCache *mcache.CacheDriver
 
-type User {
+type User struct {
 	Name string
-	Age uint
-	Bio string
+	Age  uint
+	Bio  string
 }
 
 func main() {
 	MCache = mcache.StartInstance()
-	
+
 	key := "key1"
-	
-	userSet := new(User)
-	userSet.Name = "John"
-	userSet.Age = 20
-	userSet.Bio = "gopher"
-	
-	//args - key, &value, ttl
-	MCache.Set(key, userSet, time.Minute*20)
-	if err != nil {
-		log.Println("MCACHE SET ERROR: ", err)
+
+	userSet := &User{
+		Name: "John",
+		Age:  20,
+		Bio:  "gopher",
 	}
-	
-	
+	//args - key, &value, ttl
+	err := MCache.Set(key, userSet, time.Minute*20)
+	if err != nil {
+		log.Println("MCACHE SET ERROR:", err)
+	}
+
 	var userGet User
-	if ok := mcache.Get(key, &userGet); ok {
-            fmt.Printf("User name: %s, Age: %d, Bio: %s\n", userGet.Name, userGet.Age, userGet,Bio)
-    } else {
-    	log.Println("Cache by key: %s not found", key)
-    }
+	if ok := MCache.Get(key, &userGet); ok {
+		fmt.Printf("User name: %s, Age: %d, Bio: %s\n", userGet.Name, userGet.Age, userGet.Bio)
+	} else {
+		log.Printf("Cache by key: %s not found\n", key)
+	}
 }
 ```
 
