@@ -44,7 +44,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 		return false
 	}
 	item := data.(entity.Item)
-	if entity.IsExpire(item.Expire) {
+	if item.IsExpire() {
 		return false
 	}
 	err := decodeBytes(item.Data, struc)
@@ -61,7 +61,7 @@ func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 		return entity.Item{}.DataLink, false
 	}
 	item := data.(entity.Item)
-	if entity.IsExpire(item.Expire) {
+	if item.IsExpire() {
 		return entity.Item{}.DataLink, false
 	}
 	return item.DataLink, true

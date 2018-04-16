@@ -118,7 +118,7 @@ func flush(s map[string]interface{}, keys []string) {
 		if !ok {
 			continue
 		}
-		if entity.IsExpire(value.(entity.Item).Expire) {
+		if value.(entity.Item).IsExpire() {
 			delete(s, v)
 		}
 	}

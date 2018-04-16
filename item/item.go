@@ -11,6 +11,6 @@ type Item struct {
 }
 
 // check expire cache
-func IsExpire(t time.Time) bool {
-	return t.Before(time.Now().Local())
+func (i Item) IsExpire() bool {
+	return i.Expire.Before(time.Now().Local())
 }
