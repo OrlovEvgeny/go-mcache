@@ -39,7 +39,7 @@ func TestGet(t *testing.T) {
 	var dataGet TestData
 	if ok := mcache.Get(key1, &dataGet); ok {
 		if dataGet.Name != dataSet.Name {
-			t.Errorf("Cache data incorect by key: %s", key1)
+			t.Errorf("Cache data incorrect by key: %s", key1)
 		}
 	} else {
 		t.Errorf("Cache not found by key: %s", key1)
@@ -62,7 +62,7 @@ func TestGetPointer(t *testing.T) {
 	if pointer, ok := mcache.GetPointer(key2); ok {
 		if obj, ok := pointer.(*TestData); ok {
 			if obj.Age != dataSet.Age {
-				t.Errorf("Cache data incorect by key: %s", key2)
+				t.Errorf("Cache data incorrect by key: %s", key2)
 			}
 		}
 	} else {
@@ -74,7 +74,7 @@ func TestGetPointer(t *testing.T) {
 //Get Len cache
 func TestLen(t *testing.T) {
 	if mcache.Len() != 2 {
-		t.Errorf("Cache %s incorect by key", t.Name())
+		t.Errorf("Cache %s incorrect by key", t.Name())
 	}
 	log.Printf("%s : OK\n", t.Name())
 }
@@ -84,7 +84,7 @@ func TestRemove(t *testing.T) {
 	mcache.Remove(key2)
 	mcache.Remove(key1)
 	if mcache.Len() != 0 {
-		t.Errorf("Cache %s incorect", t.Name())
+		t.Errorf("Cache %s incorrect", t.Name())
 	}
 	log.Printf("%s : OK\n", t.Name())
 
