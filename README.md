@@ -1,4 +1,4 @@
-# MCache library
+# MCache library (Beta)
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
 [![GoDoc](https://godoc.org/github.com/OrlovEvgeny/go-mcache?status.svg)](https://godoc.org/github.com/OrlovEvgeny/go-mcache)
@@ -94,6 +94,15 @@ func main() {
 
 
 *dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
+
+
+### What should be done
+
+- [ ] the possibility of closing
+- [ ] r/w benchmark statistics
+- [ ] rejection of channels in safeMap in favor of sync.Mutex (there is an opinion that it will be faster)
+
+
 
 # License:
 
