@@ -1,6 +1,6 @@
 package safeMap
 
-import it "gopkg.in/OrlovEvgeny/go-mcache.v1/item"
+import item "gopkg.in/OrlovEvgeny/go-mcache.v1/item"
 
 //
 type safeMap chan commandData
@@ -106,7 +106,7 @@ func flush(s map[string]interface{}, keys []string) {
 		if !ok {
 			continue
 		}
-		if it.IsExpire(value.(it.Item).Expire) {
+		if item.IsExpire(value.(item.Item).Expire) {
 			delete(s, v)
 		}
 	}
