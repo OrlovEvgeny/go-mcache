@@ -3,7 +3,7 @@ package gcmap
 import (
 	"sync"
 	"time"
-	safemap "gopkg.in/OrlovEvgeny/go-mcache.v1/safeMap"
+	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 )
 
 

@@ -1,6 +1,6 @@
 package safeMap
 
-import entity "gopkg.in/OrlovEvgeny/go-mcache.v1/item"
+import entity "github.com/OrlovEvgeny/go-mcache/item"
 
 //
 type safeMap chan commandData

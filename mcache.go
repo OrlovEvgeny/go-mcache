@@ -1,9 +1,9 @@
 package go_mcache
 
 import (
-	safemap "gopkg.in/OrlovEvgeny/go-mcache.v1/safeMap"
-	gcmap "gopkg.in/OrlovEvgeny/go-mcache.v1/gcmap"
-	entity "gopkg.in/OrlovEvgeny/go-mcache.v1/item"
+	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
+	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
+	entity "github.com/OrlovEvgeny/go-mcache/item"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"time"
