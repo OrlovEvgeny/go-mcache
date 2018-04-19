@@ -1,6 +1,7 @@
 package gcmap
 
 import (
+	"context"
 	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 	"sync"
 	"time"
@@ -8,11 +9,8 @@ import (
 
 var (
 	KeyChan      = make(chan string, 10000)
-	stopHB       = make(chan bool, 1)
-	stopEK       = make(chan bool, 1)
 	gcInstance   *GC
 	loadInstance = false
-	gcStoped     = false
 )
 
 //
@@ -27,14 +25,14 @@ type GC struct {
 }
 
 //
-func NewGC(store safemap.SafeMap) *GC {
+func NewGC(ctx context.Context, store safemap.SafeMap) *GC {
 	if loadInstance {
 		return gcInstance
 	}
 
 	gc := new(GC)
 	gc.storage = store
-	go gc.ExpireKey()
+	go gc.ExpireKey(ctx)
 	gcInstance = gc
 	loadInstance = true
 
@@ -42,23 +40,24 @@ func NewGC(store safemap.SafeMap) *GC {
 }
 
 //
-func (gc GC) ExpireKey() {
+func (gc GC) ExpireKey(ctx context.Context) {
 	kset := &keyset{Keys: make([]string, 0, 100)}
-	go gc.heartBeatGC(kset)
+	go gc.heartBeatGC(ctx, kset)
 
 	for {
 		select {
 		case key := <-KeyChan:
 			kset.Keys = append(kset.Keys, key)
 
-		case <-stopEK:
+		case <-ctx.Done():
+			loadInstance = false
 			return
 		}
 	}
 }
 
 //
-func (gc GC) heartBeatGC(kset *keyset) {
+func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
 	ticker := time.NewTicker(time.Second * 3)
 	for {
 		select {
@@ -73,29 +72,20 @@ func (gc GC) heartBeatGC(kset *keyset) {
 			kset.Keys = kset.Keys[:0]
 			kset.Mutex.Unlock()
 
-		case <-stopHB:
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
 //
-func (gc GC) Expired(key string, duration time.Duration) {
-	//TODO is it worth changing to - time.After(duration) ?
-	time.Sleep(duration)
-	if gcStoped {
+func (gc GC) Expired(ctx context.Context, key string, duration time.Duration) {
+
+	select {
+	case <-time.After(duration):
+		KeyChan <- key
+		return
+	case <-ctx.Done():
 		return
 	}
-	KeyChan <- key
-}
-
-//
-func GCStop() {
-	loadInstance = false
-	gcStoped = true
-	stopHB <- gcStoped
-	stopEK <- gcStoped
-	close(stopHB)
-	close(stopEK)
-	close(KeyChan)
 }

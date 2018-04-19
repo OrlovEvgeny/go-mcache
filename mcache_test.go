@@ -27,7 +27,7 @@ func TestSet(t *testing.T) {
 	dataSet.ID = 11
 	dataSet.Age = 24
 
-	err := mcache.Set(key1, dataSet, time.Minute*2)
+	err := mcache.Set(key1, dataSet, time.Second*3)
 	if err != nil {
 		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
 	}
@@ -50,7 +50,7 @@ func TestGet(t *testing.T) {
 
 //Set cache Pointer data
 func TestSetPointer(t *testing.T) {
-	err := mcache.SetPointer(key2, dataSet, time.Minute*2)
+	err := mcache.SetPointer(key2, dataSet, time.Second*3)
 	if err != nil {
 		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
 	}

@@ -1,6 +1,7 @@
 package go_mcache
 
 import (
+	"context"
 	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
 	entity "github.com/OrlovEvgeny/go-mcache/item"
 	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
@@ -18,21 +19,31 @@ var (
 )
 
 //
-func initStore() {
+func initStore() (context.Context, context.CancelFunc) {
+	ctx, finish := context.WithCancel(context.Background())
 	storage = safemap.NewStorage()
-	gc = gcmap.NewGC(storage)
+	gc = gcmap.NewGC(ctx, storage)
+	return ctx, finish
 }
 
 //
-type CacheDriver struct{}
+type CacheDriver struct {
+	ctx      context.Context
+	closeCtx context.CancelFunc
+}
 
 //
 func StartInstance() *CacheDriver {
 	if loadInstance {
 		return instance
 	}
-	initStore()
+
+	ctx, finish := initStore()
+
 	instance = new(CacheDriver)
+	instance.ctx = ctx
+	instance.closeCtx = finish
+
 	loadInstance = true
 	return instance
 }
@@ -70,7 +81,7 @@ func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 //
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go gc.Expired(key, ttl)
+	go gc.Expired(mc.ctx, key, ttl)
 	v, err := encodeBytes(value)
 	if err != nil {
 		log.Println("MCACHE SET ERROR: ", err)
@@ -83,7 +94,7 @@ func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) err
 //
 func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go gc.Expired(key, ttl)
+	go gc.Expired(mc.ctx, key, ttl)
 	storage.Insert(key, entity.Item{Key: key, Expire: expire, DataLink: value})
 	return nil
 }
@@ -111,7 +122,7 @@ func (mc *CacheDriver) GCBufferQueue() int {
 //
 func (mc *CacheDriver) Close() map[string]interface{} {
 	loadInstance = false
-	gcmap.GCStop()
+	mc.closeCtx()
 	return storage.Close()
 }
 
