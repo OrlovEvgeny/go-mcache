@@ -18,7 +18,6 @@ with expiration times, it doesn't need to serialize, and quick removal of expire
 ```
 
 
-
 **Example a Pointer value (vary fast method)**
 
 ```go
