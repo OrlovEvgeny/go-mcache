@@ -1,7 +1,7 @@
 # MCache library
 
 [![Build Status](https://travis-ci.org/OrlovEvgeny/go-mcache.svg?branch=master)](https://travis-ci.org/OrlovEvgeny/go-mcache)
-[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
 [![GoDoc](https://godoc.org/github.com/OrlovEvgeny/go-mcache?status.svg)](https://godoc.org/github.com/OrlovEvgeny/go-mcache)
 
 go-mcache - this is a fast key:value storage
