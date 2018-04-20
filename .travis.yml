@@ -1,0 +1,5 @@
+language: go
+go: 1.9
+install:
+  - go get -u github.com/vmihailenco/msgpack
+  - go get -v
