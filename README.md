@@ -116,12 +116,12 @@ func main() {
 
 *dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
 
-
 ### What should be done
 
 - [x] the possibility of closing
 - [ ] r/w benchmark statistics
 - [ ] rejection of channels in safeMap in favor of sync.Mutex (there is an opinion that it will be faster)
+
 
 
 
