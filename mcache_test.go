@@ -1,4 +1,4 @@
-package go_mcache
+package gomcache
 
 import (
 	"log"

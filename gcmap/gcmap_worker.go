@@ -45,7 +45,7 @@ func (gc GC) LenBufferKeyChan() int {
 	return len(gc.keyChan)
 }
 
-//collects foul keys, what to remove later
+//ExpireKey - collects foul keys, what to remove later
 func (gc GC) ExpireKey(ctx context.Context) {
 	kset := &keyset{Keys: make([]string, 0, 100)}
 	go gc.heartBeatGC(ctx, kset)
@@ -62,7 +62,7 @@ func (gc GC) ExpireKey(ctx context.Context) {
 	}
 }
 
-//removes old keys by timer
+//heartBeatGC removes old keys by timer
 func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
 	//TODO it may be worthwhile to set a custom interval for deleting old keys
 	ticker := time.NewTicker(time.Second * 3)
@@ -85,7 +85,7 @@ func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
 	}
 }
 
-//fund Expired - gorutine which is launched every time the method is called, and ensures that the key is removed from the repository after the time expires
+//Expired - fund Expired, gorutine which is launched every time the method is called, and ensures that the key is removed from the repository after the time expires
 func (gc GC) Expired(ctx context.Context, key string, duration time.Duration) {
 	select {
 	case <-time.After(duration):

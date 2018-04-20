@@ -1,4 +1,4 @@
-package go_mcache
+package gomcache
 
 import (
 	"context"
@@ -48,7 +48,7 @@ func StartInstance() *CacheDriver {
 	return instance
 }
 
-//Get() - returns serialize data
+//Get - returns serialize data
 func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if !ok {
@@ -119,7 +119,7 @@ func (mc *CacheDriver) GCBufferQueue() int {
 	return gc.LenBufferKeyChan()
 }
 
-//
+//Close - close all MCache
 func (mc *CacheDriver) Close() map[string]interface{} {
 	loadInstance = false
 	mc.closeCtx()
