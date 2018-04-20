@@ -8,23 +8,23 @@ import (
 )
 
 var (
-	KeyChan      = make(chan string, 10000)
 	gcInstance   *GC
 	loadInstance = false
 )
 
-//
+//keyset - sync slice for expired keys
 type keyset struct {
 	Keys []string
 	sync.Mutex
 }
 
-//
+//GC garbage clean struct
 type GC struct {
 	storage safemap.SafeMap
+	keyChan chan string
 }
 
-//
+//NewGC - singleton func, returns *GC struct
 func NewGC(ctx context.Context, store safemap.SafeMap) *GC {
 	if loadInstance {
 		return gcInstance
@@ -32,6 +32,7 @@ func NewGC(ctx context.Context, store safemap.SafeMap) *GC {
 
 	gc := new(GC)
 	gc.storage = store
+	gc.keyChan = make(chan string, 10000)
 	go gc.ExpireKey(ctx)
 	gcInstance = gc
 	loadInstance = true
@@ -39,14 +40,19 @@ func NewGC(ctx context.Context, store safemap.SafeMap) *GC {
 	return gc
 }
 
-//
+//LenBufferKeyChan - returns len usage buffet of keyChan chanel
+func (gc GC) LenBufferKeyChan() int {
+	return len(gc.keyChan)
+}
+
+//collects foul keys, what to remove later
 func (gc GC) ExpireKey(ctx context.Context) {
 	kset := &keyset{Keys: make([]string, 0, 100)}
 	go gc.heartBeatGC(ctx, kset)
 
 	for {
 		select {
-		case key := <-KeyChan:
+		case key := <-gc.keyChan:
 			kset.Keys = append(kset.Keys, key)
 
 		case <-ctx.Done():
@@ -56,8 +62,9 @@ func (gc GC) ExpireKey(ctx context.Context) {
 	}
 }
 
-//
+//removes old keys by timer
 func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
+	//TODO it may be worthwhile to set a custom interval for deleting old keys
 	ticker := time.NewTicker(time.Second * 3)
 	for {
 		select {
@@ -78,12 +85,11 @@ func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
 	}
 }
 
-//
+//fund Expired - gorutine which is launched every time the method is called, and ensures that the key is removed from the repository after the time expires
 func (gc GC) Expired(ctx context.Context, key string, duration time.Duration) {
-
 	select {
 	case <-time.After(duration):
-		KeyChan <- key
+		gc.keyChan <- key
 		return
 	case <-ctx.Done():
 		return

@@ -13,6 +13,7 @@ var (
 	key2    = "keystr2"
 )
 
+//TestData
 type TestData struct {
 	ID   int
 	Name string
@@ -90,6 +91,7 @@ func TestRemove(t *testing.T) {
 
 }
 
+//TestClose
 func TestClose(t *testing.T) {
 	mcache.Close()
 	log.Printf("%s : OK\n", t.Name())

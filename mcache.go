@@ -18,7 +18,7 @@ var (
 	loadInstance = false
 )
 
-//
+//initStore - returns context and context close func. Inited map storage and remove old cache
 func initStore() (context.Context, context.CancelFunc) {
 	ctx, finish := context.WithCancel(context.Background())
 	storage = safemap.NewStorage()
@@ -26,13 +26,13 @@ func initStore() (context.Context, context.CancelFunc) {
 	return ctx, finish
 }
 
-//
+//CacheDriver context struct
 type CacheDriver struct {
 	ctx      context.Context
 	closeCtx context.CancelFunc
 }
 
-//
+//StartInstance - singleton func, returns CacheDriver struct
 func StartInstance() *CacheDriver {
 	if loadInstance {
 		return instance
@@ -48,7 +48,7 @@ func StartInstance() *CacheDriver {
 	return instance
 }
 
-//
+//Get() - returns serialize data
 func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	data, ok := storage.Find(key)
 	if !ok {
@@ -65,7 +65,7 @@ func (mc *CacheDriver) Get(key string, struc interface{}) bool {
 	return true
 }
 
-//
+//GetPointer - returns &pointer
 func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	data, ok := storage.Find(key)
 	if !ok {
@@ -78,7 +78,7 @@ func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	return item.DataLink, true
 }
 
-//
+//Set - add cache data and serialize/deserialize value
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
 	go gc.Expired(mc.ctx, key, ttl)
@@ -91,7 +91,7 @@ func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) err
 	return nil
 }
 
-//
+//SetPointer - add cache &pointer data (more and example info README.md)
 func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
 	go gc.Expired(mc.ctx, key, ttl)
@@ -99,24 +99,24 @@ func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Durati
 	return nil
 }
 
-//
+//Remove - value by key
 func (mc *CacheDriver) Remove(key string) {
 	storage.Delete(key)
 }
 
-//
+//Truncate - clean cache storage
 func (mc *CacheDriver) Truncate() {
 	storage.Truncate()
 }
 
-//
+//Len - returns current count storage
 func (mc *CacheDriver) Len() int {
 	return storage.Len()
 }
 
-//
+//GCBufferQueue - returns the current use len KeyChan chanel buffer
 func (mc *CacheDriver) GCBufferQueue() int {
-	return len(gcmap.KeyChan)
+	return gc.LenBufferKeyChan()
 }
 
 //
@@ -126,12 +126,12 @@ func (mc *CacheDriver) Close() map[string]interface{} {
 	return storage.Close()
 }
 
-//
+//deserialize value
 func encodeBytes(value interface{}) ([]byte, error) {
 	return msgpack.Marshal(value)
 }
 
-//
+//serialize value
 func decodeBytes(buf []byte, value interface{}) error {
 	return msgpack.Unmarshal(buf, value)
 }
