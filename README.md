@@ -67,7 +67,7 @@ func main() {
 
 
 
-**Example serialize and deserialize value**
+**Example serialize and deserialize value** (slow method)
 
 ```go
 package main
