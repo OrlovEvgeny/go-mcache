@@ -47,7 +47,7 @@ func main() {
 	user := &User{
 		Name: "John",
 		Age:  20,
-		Bio:  "gopher",
+		Bio:  "gopher 80 lvl",
 	}
 	//args - key, &value, ttl
 	err := MCache.SetPointer(key, user, time.Minute*20)
@@ -96,7 +96,7 @@ func main() {
 	userSet := &User{
 		Name: "John",
 		Age:  20,
-		Bio:  "gopher",
+		Bio:  "gopher 80 lvl",
 	}
 	//args - key, &value, ttl
 	err := MCache.Set(key, userSet, time.Minute*20)
