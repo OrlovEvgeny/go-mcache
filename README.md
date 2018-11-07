@@ -114,12 +114,21 @@ func main() {
 ```
 
 
+### Performance Benchmarks
+
+    goos: darwin
+    goarch: amd64
+    BenchmarkWrite          200000              8706 ns/op
+    BenchmarkRead          1000000              1589 ns/op
+    BenchmarkRW             300000             12194 ns/op
+
+
 *dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
 
 ### What should be done
 
 - [x] the possibility of closing
-- [ ] r/w benchmark statistics
+- [x] r/w benchmark statistics
 - [ ] rejection of channels in safeMap in favor of sync.Mutex (there is an opinion that it will be faster)
 
 
