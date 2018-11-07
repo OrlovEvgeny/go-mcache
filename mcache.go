@@ -2,7 +2,7 @@ package gomcache
 
 import (
 	"context"
-	gcmap "github.com/OrlovEvgeny/go-mcache/gcmap"
+	"github.com/OrlovEvgeny/go-mcache/gcmap"
 	entity "github.com/OrlovEvgeny/go-mcache/item"
 	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
 	"github.com/vmihailenco/msgpack"

@@ -4,12 +4,12 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
 [![GoDoc](https://godoc.org/github.com/OrlovEvgeny/go-mcache?status.svg)](https://godoc.org/github.com/OrlovEvgeny/go-mcache)
 
-go-mcache - this is a fast key:value storage
-Its major advantage is that, being essentially a thread-safe 
+go-mcache - this is a fast key:value storage.
+Its major advantage is that, being essentially a thread-safe .
 ```go 
 map[string]interface{}
 ``` 
-with expiration times, it doesn't need to serialize, and quick removal of expired keys
+with expiration times, it doesn't need to serialize, and quick removal of expired keys.
 
 # Installation
 
@@ -47,7 +47,7 @@ func main() {
 	user := &User{
 		Name: "John",
 		Age:  20,
-		Bio:  "gopher",
+		Bio:  "gopher 80 lvl",
 	}
 	//args - key, &value, ttl
 	err := MCache.SetPointer(key, user, time.Minute*20)
@@ -67,7 +67,7 @@ func main() {
 
 
 
-**Example serialize and deserialize value**
+**Example serialize and deserialize value** (slow method)
 
 ```go
 package main
@@ -96,7 +96,7 @@ func main() {
 	userSet := &User{
 		Name: "John",
 		Age:  20,
-		Bio:  "gopher",
+		Bio:  "gopher 80 lvl",
 	}
 	//args - key, &value, ttl
 	err := MCache.Set(key, userSet, time.Minute*20)
