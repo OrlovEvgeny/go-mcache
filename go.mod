@@ -1,1 +1,1 @@
-module gomcache
+module github.com/OrlovEvgeny/go-mcache

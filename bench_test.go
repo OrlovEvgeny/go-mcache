@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-
 //BenchmarkWrite
 func BenchmarkWrite(b *testing.B) {
 	mcache = StartInstance()
