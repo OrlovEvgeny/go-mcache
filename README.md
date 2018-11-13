@@ -21,18 +21,6 @@ with expiration times, it doesn't need to serialize, and quick removal of expire
 **Example a Pointer value (vary fast method)**
 
 ```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"time"
-
-	mcache "github.com/OrlovEvgeny/go-mcache"
-)
-
-var MCache *mcache.CacheDriver
-
 type User struct {
 	Name string
 	Age  uint
@@ -40,27 +28,28 @@ type User struct {
 }
 
 func main() {
+	//Start mcache instance
 	MCache = mcache.StartInstance()
 
-	key := "key1"
+	//Create custom key
+	key := "custom_key1"
 
+	//Create example struct
 	user := &User{
 		Name: "John",
 		Age:  20,
 		Bio:  "gopher 80 lvl",
 	}
+	
 	//args - key, &value, ttl
 	err := MCache.SetPointer(key, user, time.Minute*20)
 	if err != nil {
-		log.Println("MCACHE SET ERROR:", err)
+		log.Fatal(err)
 	}
 
 	if pointer, ok := MCache.GetPointer(key); ok {
-		if objUser, ok := pointer.(*User); ok {
-			fmt.Printf("User name: %s, Age: %d, Bio: %s\n", objUser.Name, objUser.Age, objUser.Bio)
-		}
-	} else {
-		log.Printf("Cache by key: %s not found\n", key)
+		objUser:= pointer.(*User)
+		fmt.Printf("User name: %s, Age: %d, Bio: %s\n", objUser.Name, objUser.Age, objUser.Bio)			
 	}
 }
 ```
@@ -70,18 +59,6 @@ func main() {
 **Example serialize and deserialize value** (slow method)
 
 ```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"time"
-
-	mcache "github.com/OrlovEvgeny/go-mcache"
-)
-
-var MCache *mcache.CacheDriver
-
 type User struct {
 	Name string
 	Age  uint
@@ -89,26 +66,26 @@ type User struct {
 }
 
 func main() {
+	//Start mcache instance
 	MCache = mcache.StartInstance()
 
-	key := "key1"
+	//Create custom key
+	key := "custom_key2"
 
 	userSet := &User{
-		Name: "John",
-		Age:  20,
+		Name: "Bob",
+		Age:  33,
 		Bio:  "gopher 80 lvl",
 	}
 	//args - key, &value, ttl
 	err := MCache.Set(key, userSet, time.Minute*20)
 	if err != nil {
-		log.Println("MCACHE SET ERROR:", err)
+		log.Fatal(err)
 	}
 
 	var userGet User
 	if ok := MCache.Get(key, &userGet); ok {
 		fmt.Printf("User name: %s, Age: %d, Bio: %s\n", userGet.Name, userGet.Age, userGet.Bio)
-	} else {
-		log.Printf("Cache by key: %s not found\n", key)
 	}
 }
 ```
