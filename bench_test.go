@@ -1,4 +1,4 @@
-package gomcache
+package mcache
 
 import (
 	"fmt"

@@ -2,7 +2,7 @@ package gcmap
 
 import (
 	"context"
-	safemap "github.com/OrlovEvgeny/go-mcache/safeMap"
+	"github.com/OrlovEvgeny/go-mcache/safeMap"
 	"sync"
 	"time"
 )
@@ -20,12 +20,12 @@ type keyset struct {
 
 //GC garbage clean struct
 type GC struct {
-	storage safemap.SafeMap
+	storage safeMap.SafeMap
 	keyChan chan string
 }
 
 //NewGC - singleton func, returns *GC struct
-func NewGC(ctx context.Context, store safemap.SafeMap) *GC {
+func NewGC(ctx context.Context, store safeMap.SafeMap) *GC {
 	if loadInstance {
 		return gcInstance
 	}
