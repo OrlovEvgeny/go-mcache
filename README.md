@@ -17,7 +17,6 @@ with expiration times, it doesn't need to serialize, and quick removal of expire
 ~ $ go get -u github.com/OrlovEvgeny/go-mcache
 ```
 
-
 **Example a Pointer value (vary fast method)**
 
 ```go
