@@ -6,6 +6,7 @@
 
 go-mcache - this is a fast key:value storage.
 Its major advantage is that, being essentially a thread-safe .
+
 ```go 
 map[string]interface{}
 ``` 
