@@ -4,6 +4,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
 [![GoDoc](https://godoc.org/github.com/OrlovEvgeny/go-mcache?status.svg)](https://godoc.org/github.com/OrlovEvgeny/go-mcache)
 
+![MCache](logo.jpg)
+
 go-mcache - this is a fast key:value storage.
 Its major advantage is that, being essentially a thread-safe .
 
