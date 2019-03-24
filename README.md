@@ -95,10 +95,9 @@ func main() {
 
     goos: darwin
     goarch: amd64
-    BenchmarkWrite          200000              8706 ns/op
-    BenchmarkRead          1000000              1589 ns/op
-    BenchmarkRW             300000             12194 ns/op
-
+    BenchmarkWrite-4          200000              7991 ns/op 
+    BenchmarkRead-4          1000000              1716 ns/op 
+    BenchmarkRW-4             300000              9894 ns/op
 
 *dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
 
