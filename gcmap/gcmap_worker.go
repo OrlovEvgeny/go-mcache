@@ -14,8 +14,32 @@ var (
 
 //keyset - sync slice for expired keys
 type keyset struct {
-	Keys []string
-	sync.Mutex
+	keys [2][]string
+	cur int
+	mutex sync.Mutex
+}
+
+func (kset *keyset) len() int {
+	return len(kset.keys[kset.cur])
+}
+
+func (kset *keyset) append(key string) {
+	kset.mutex.Lock()
+	defer kset.mutex.Unlock()
+
+	kset.keys[kset.cur] = append(kset.keys[kset.cur], key)
+}
+
+func (kset *keyset) swap() []string {
+	kset.mutex.Lock()
+	defer kset.mutex.Unlock()
+
+	keys := kset.keys[kset.cur]
+	kset.keys[kset.cur] = kset.keys[kset.cur][:0]
+
+	kset.cur = (kset.cur + 1) & 0x1
+
+	return keys
 }
 
 //GC garbage clean struct
@@ -47,13 +71,16 @@ func (gc GC) LenBufferKeyChan() int {
 
 //ExpireKey - collects foul keys, what to remove later
 func (gc GC) ExpireKey(ctx context.Context) {
-	kset := &keyset{Keys: make([]string, 0, 100)}
+	kset := &keyset{cur: 0}
+	kset.keys[0] = make([]string, 0, 100)
+	kset.keys[1] = make([]string, 0, 100)
+
 	go gc.heartBeatGC(ctx, kset)
 
 	for {
 		select {
 		case key := <-gc.keyChan:
-			kset.Keys = append(kset.Keys, key)
+			kset.append(key)
 
 		case <-ctx.Done():
 			loadInstance = false
@@ -69,15 +96,11 @@ func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
 	for {
 		select {
 		case <-ticker.C:
-			if len(kset.Keys) == 0 {
+			if kset.len() == 0 {
 				continue
 			}
-			kset.Mutex.Lock()
-			keys := make([]string, len(kset.Keys))
-			copy(keys, kset.Keys)
+			keys := kset.swap()
 			gc.storage.Flush(keys)
-			kset.Keys = kset.Keys[:0]
-			kset.Mutex.Unlock()
 
 		case <-ctx.Done():
 			return
