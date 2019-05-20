@@ -5,10 +5,10 @@ import (
 	"github.com/OrlovEvgeny/go-mcache/gcmap"
 	"github.com/OrlovEvgeny/go-mcache/item"
 	"github.com/OrlovEvgeny/go-mcache/safeMap"
-	"github.com/vmihailenco/msgpack"
-	"log"
 	"time"
 )
+
+const TTL_FOREVER = time.Hour * 87660
 
 //
 var (
@@ -32,7 +32,7 @@ type CacheDriver struct {
 	closeCtx context.CancelFunc
 }
 
-//StartInstance - singleton func, returns CacheDriver struct
+//Deprecated: use New instead.
 func StartInstance() *CacheDriver {
 	if loadInstance {
 		return instance
@@ -48,25 +48,20 @@ func StartInstance() *CacheDriver {
 	return instance
 }
 
-//Get - returns serialize data
-func (mc *CacheDriver) Get(key string, struc interface{}) bool {
-	data, ok := storage.Find(key)
-	if !ok {
-		return false
-	}
-	item := data.(item.Item)
-	if item.IsExpire() {
-		return false
-	}
-	err := decodeBytes(item.Data, struc)
-	if err != nil {
-		log.Fatal("error Decoding bytes cache data: ", err)
-	}
-	return true
+//New - returns CacheDriver struct
+func New() *CacheDriver {
+	ctx, finish := initStore()
+
+	instance = new(CacheDriver)
+	instance.ctx = ctx
+	instance.closeCtx = finish
+
+	loadInstance = true
+	return instance
 }
 
-//GetPointer - returns &pointer
-func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
+//Get - returns serialize data
+func (mc *CacheDriver) Get(key string) (interface{}, bool) {
 	data, ok := storage.Find(key)
 	if !ok {
 		return item.Item{}.DataLink, false
@@ -78,23 +73,12 @@ func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
 	return entity.DataLink, true
 }
 
-//Set - add cache data and serialize/deserialize value
+//Set - add cache data value
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
-	go gc.Expired(mc.ctx, key, ttl)
-	v, err := encodeBytes(value)
-	if err != nil {
-		log.Println("MCACHE SET ERROR: ", err)
-		return err
+	if ttl != TTL_FOREVER {
+		go gc.Expired(mc.ctx, key, ttl)
 	}
-	storage.Insert(key, item.Item{Key: key, Expire: expire, Data: v})
-	return nil
-}
-
-//SetPointer - add cache &pointer data (more and example info README.md)
-func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
-	expire := time.Now().Local().Add(ttl)
-	go gc.Expired(mc.ctx, key, ttl)
 	storage.Insert(key, item.Item{Key: key, Expire: expire, DataLink: value})
 	return nil
 }
@@ -126,12 +110,13 @@ func (mc *CacheDriver) Close() map[string]interface{} {
 	return storage.Close()
 }
 
-//deserialize value
-func encodeBytes(value interface{}) ([]byte, error) {
-	return msgpack.Marshal(value)
+
+//Deprecated: use Set instead
+func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
+	return mc.Set(key, value, ttl)
 }
 
-//serialize value
-func decodeBytes(buf []byte, value interface{}) error {
-	return msgpack.Unmarshal(buf, value)
+//Deprecated: use Get instead
+func (mc *CacheDriver) GetPointer(key string) (interface{}, bool) {
+	return mc.Get(key)
 }

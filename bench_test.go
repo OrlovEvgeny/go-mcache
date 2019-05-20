@@ -3,29 +3,28 @@ package mcache
 import (
 	"fmt"
 	"testing"
-	"time"
 )
 
 //BenchmarkWrite
 func BenchmarkWrite(b *testing.B) {
-	mcache = StartInstance()
+	mcache = New()
 
 	for i := 0; i < b.N; i++ {
-		mcache.SetPointer(fmt.Sprintf("%d", i), i, time.Second*60)
+		mcache.Set(fmt.Sprintf("%d", i), i, TTL_FOREVER)
 	}
 }
 
 //BenchmarkRead
 func BenchmarkRead(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		mcache.GetPointer(fmt.Sprintf("%d", i))
+		mcache.Get(fmt.Sprintf("%d", i))
 	}
 }
 
 //BenchmarkRW
 func BenchmarkRW(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		mcache.SetPointer(fmt.Sprintf("%d", i), i, time.Second*60)
-		mcache.GetPointer(fmt.Sprintf("%d", i))
+		mcache.Set(fmt.Sprintf("%d", i), i, TTL_FOREVER)
+		mcache.Get(fmt.Sprintf("%d", i))
 	}
 }

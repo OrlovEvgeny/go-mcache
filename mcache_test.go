@@ -3,7 +3,6 @@ package mcache
 import (
 	"log"
 	"testing"
-	"time"
 )
 
 var (
@@ -20,38 +19,9 @@ type TestData struct {
 	Age  int
 }
 
-//Set cache
-func TestSet(t *testing.T) {
-	mcache = StartInstance()
-
-	dataSet.Name = "John"
-	dataSet.ID = 11
-	dataSet.Age = 24
-
-	err := mcache.Set(key1, dataSet, time.Second*3)
-	if err != nil {
-		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
-	}
-	log.Printf("%s : OK\n", t.Name())
-}
-
-//Get cache
-func TestGet(t *testing.T) {
-	var dataGet TestData
-	if ok := mcache.Get(key1, &dataGet); ok {
-		if dataGet.Name != dataSet.Name {
-			t.Errorf("Cache data incorrect by key: %s", key1)
-		}
-	} else {
-		t.Errorf("Cache not found by key: %s", key1)
-	}
-	log.Printf("%s : OK\n", t.Name())
-
-}
-
 //Set cache Pointer data
-func TestSetPointer(t *testing.T) {
-	err := mcache.SetPointer(key2, dataSet, time.Second*3)
+func TestSet(t *testing.T) {
+	err := mcache.Set(key2, dataSet, TTL_FOREVER)
 	if err != nil {
 		t.Errorf("Error %s cache data: %v, ERROR_MSG: %v", t.Name(), dataSet, err)
 	}
@@ -60,7 +30,7 @@ func TestSetPointer(t *testing.T) {
 
 //Get cache Pointer
 func TestGetPointer(t *testing.T) {
-	if pointer, ok := mcache.GetPointer(key2); ok {
+	if pointer, ok := mcache.Get(key2); ok {
 		if obj, ok := pointer.(*TestData); ok {
 			if obj.Age != dataSet.Age {
 				t.Errorf("Cache data incorrect by key: %s", key2)

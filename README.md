@@ -29,63 +29,26 @@ type User struct {
 
 func main() {
 	//Start mcache instance
-	MCache = mcache.StartInstance()
+	MCache = mcache.New()
 
 	//Create custom key
 	key := "custom_key1"
-
 	//Create example struct
 	user := &User{
 		Name: "John",
 		Age:  20,
 		Bio:  "gopher 80 lvl",
 	}
-	
-	//args - key, &value, ttl
-	err := MCache.SetPointer(key, user, time.Minute*20)
+
+	//args - key, &value, ttl (or you need never delete, set ttl is mcache.TTL_FOREVER)
+	err := MCache.Set(key, user, time.Minute*20)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if pointer, ok := MCache.GetPointer(key); ok {
-		objUser:= pointer.(*User)
+	if data, ok := MCache.Get(key); ok {
+		objUser:= data.(*User)
 		fmt.Printf("User name: %s, Age: %d, Bio: %s\n", objUser.Name, objUser.Age, objUser.Bio)			
-	}
-}
-```
-
-
-
-**Example serialize and deserialize value** (slow method)
-
-```go
-type User struct {
-	Name string
-	Age  uint
-	Bio  string
-}
-
-func main() {
-	//Start mcache instance
-	MCache = mcache.StartInstance()
-
-	//Create custom key
-	key := "custom_key2"
-
-	userSet := &User{
-		Name: "Bob",
-		Age:  33,
-		Bio:  "gopher 80 lvl",
-	}
-	//args - key, &value, ttl
-	err := MCache.Set(key, userSet, time.Minute*20)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var userGet User
-	if ok := MCache.Get(key, &userGet); ok {
-		fmt.Printf("User name: %s, Age: %d, Bio: %s\n", userGet.Name, userGet.Age, userGet.Bio)
 	}
 }
 ```
@@ -98,9 +61,7 @@ func main() {
     BenchmarkWrite-4          200000              7991 ns/op 
     BenchmarkRead-4          1000000              1716 ns/op 
     BenchmarkRW-4             300000              9894 ns/op
-
-*dependency use*: [msgpack](https://github.com/vmihailenco/msgpack)
-
+    
 ### What should be done
 
 - [x] the possibility of closing
