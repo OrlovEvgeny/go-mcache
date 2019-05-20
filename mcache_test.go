@@ -19,6 +19,10 @@ type TestData struct {
 	Age  int
 }
 
+func init()  {
+	mcache = New()
+}
+
 //Set cache Pointer data
 func TestSet(t *testing.T) {
 	err := mcache.Set(key2, dataSet, TTL_FOREVER)
@@ -44,7 +48,7 @@ func TestGetPointer(t *testing.T) {
 
 //Get Len cache
 func TestLen(t *testing.T) {
-	if mcache.Len() != 2 {
+	if mcache.Len() != 1 {
 		t.Errorf("Cache %s incorrect by key", t.Name())
 	}
 	log.Printf("%s : OK\n", t.Name())
