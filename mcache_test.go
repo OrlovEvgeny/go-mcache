@@ -19,7 +19,7 @@ type TestData struct {
 	Age  int
 }
 
-func init()  {
+func init() {
 	mcache = New()
 }
 

@@ -14,8 +14,8 @@ var (
 
 //keyset - sync slice for expired keys
 type keyset struct {
-	keys [2][]string
-	cur int
+	keys  [2][]string
+	cur   int
 	mutex sync.Mutex
 }
 

@@ -10,19 +10,11 @@ import (
 
 const TTL_FOREVER = time.Hour * 87660
 
-//
-var (
-	storage      safeMap.SafeMap
-	gc           *gcmap.GC
-	instance     *CacheDriver
-	loadInstance = false
-)
-
 //initStore - returns context and context close func. Inited map storage and remove old cache
-func initStore() (context.Context, context.CancelFunc) {
+func (mc *CacheDriver) initStore() (context.Context, context.CancelFunc) {
 	ctx, finish := context.WithCancel(context.Background())
-	storage = safeMap.NewStorage()
-	gc = gcmap.NewGC(ctx, storage)
+	mc.storage = safeMap.NewStorage()
+	mc.gc = gcmap.NewGC(ctx, mc.storage)
 	return ctx, finish
 }
 
@@ -30,39 +22,32 @@ func initStore() (context.Context, context.CancelFunc) {
 type CacheDriver struct {
 	ctx      context.Context
 	closeCtx context.CancelFunc
+	storage  safeMap.SafeMap
+	gc       *gcmap.GC
+	instance *CacheDriver
 }
 
 //Deprecated: use New instead.
 func StartInstance() *CacheDriver {
-	if loadInstance {
-		return instance
-	}
-
-	ctx, finish := initStore()
-
-	instance = new(CacheDriver)
-	instance.ctx = ctx
-	instance.closeCtx = finish
-
-	loadInstance = true
-	return instance
+	cdriver := new(CacheDriver)
+	ctx, finish := cdriver.initStore()
+	cdriver.ctx = ctx
+	cdriver.closeCtx = finish
+	return cdriver
 }
 
 //New - returns CacheDriver struct
 func New() *CacheDriver {
-	ctx, finish := initStore()
-
-	instance = new(CacheDriver)
-	instance.ctx = ctx
-	instance.closeCtx = finish
-
-	loadInstance = true
-	return instance
+	cdriver := new(CacheDriver)
+	ctx, finish := cdriver.initStore()
+	cdriver.ctx = ctx
+	cdriver.closeCtx = finish
+	return cdriver
 }
 
 //Get - returns serialize data
 func (mc *CacheDriver) Get(key string) (interface{}, bool) {
-	data, ok := storage.Find(key)
+	data, ok := mc.storage.Find(key)
 	if !ok {
 		return item.Item{}.DataLink, false
 	}
@@ -77,39 +62,37 @@ func (mc *CacheDriver) Get(key string) (interface{}, bool) {
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
 	expire := time.Now().Local().Add(ttl)
 	if ttl != TTL_FOREVER {
-		go gc.Expired(mc.ctx, key, ttl)
+		go mc.gc.Expired(mc.ctx, key, ttl)
 	}
-	storage.Insert(key, item.Item{Key: key, Expire: expire, DataLink: value})
+	mc.storage.Insert(key, item.Item{Key: key, Expire: expire, DataLink: value})
 	return nil
 }
 
 //Remove - value by key
 func (mc *CacheDriver) Remove(key string) {
-	storage.Delete(key)
+	mc.storage.Delete(key)
 }
 
 //Truncate - clean cache storage
 func (mc *CacheDriver) Truncate() {
-	storage.Truncate()
+	mc.storage.Truncate()
 }
 
 //Len - returns current count storage
 func (mc *CacheDriver) Len() int {
-	return storage.Len()
+	return mc.storage.Len()
 }
 
 //GCBufferQueue - returns the current use len KeyChan chanel buffer
 func (mc *CacheDriver) GCBufferQueue() int {
-	return gc.LenBufferKeyChan()
+	return mc.gc.LenBufferKeyChan()
 }
 
 //Close - close all MCache
 func (mc *CacheDriver) Close() map[string]interface{} {
-	loadInstance = false
 	mc.closeCtx()
-	return storage.Close()
+	return mc.storage.Close()
 }
-
 
 //Deprecated: use Set instead
 func (mc *CacheDriver) SetPointer(key string, value interface{}, ttl time.Duration) error {
