@@ -1,6 +1,6 @@
 # go-mcache
 
-[![Build Status](https://travis-ci.org/OrlovEvgeny/go-mcache.svg?branch=master)](https://travis-ci.org/OrlovEvgeny/go-mcache) [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache) [![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache) [![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
 
 High-performance, thread-safe in-memory key-value cache with expiration support and minimal GC pressure.
 
