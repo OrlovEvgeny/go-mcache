@@ -1,120 +1,276 @@
 package gcmap
 
 import (
+	"container/heap"
 	"context"
-	"github.com/OrlovEvgeny/go-mcache/safeMap"
 	"sync"
 	"time"
+
+	"github.com/OrlovEvgeny/go-mcache/safeMap"
 )
 
-var (
-	gcInstance   *GC
-	loadInstance = false
-)
-
-//keyset - sync slice for expired keys
-type keyset struct {
-	keys  [2][]string
-	cur   int
-	mutex sync.Mutex
+// expiryItem represents a cache key and its expiration time for use in a min-heap.
+type expiryItem struct {
+	key      string    // Cache key
+	expireAt time.Time // Expiration timestamp
+	index    int       // Position in the heap
 }
 
-func (kset *keyset) len() int {
-	return len(kset.keys[kset.cur])
+// expiryHeap implements a min-heap of expiryItems.
+type expiryHeap []*expiryItem
+
+func (h expiryHeap) Len() int           { return len(h) }
+func (h expiryHeap) Less(i, j int) bool { return h[i].expireAt.Before(h[j].expireAt) }
+func (h expiryHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].index = i; h[j].index = j }
+func (h *expiryHeap) Push(x interface{}) {
+	item := x.(*expiryItem)
+	item.index = len(*h)
+	*h = append(*h, item)
+}
+func (h *expiryHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil  // Prevent memory leak
+	item.index = -1 // Invalidate index
+	*h = old[0 : n-1]
+	return item
 }
 
-func (kset *keyset) append(key string) {
-	kset.mutex.Lock()
-	defer kset.mutex.Unlock()
-
-	kset.keys[kset.cur] = append(kset.keys[kset.cur], key)
-}
-
-func (kset *keyset) swap() []string {
-	kset.mutex.Lock()
-	defer kset.mutex.Unlock()
-
-	keys := kset.keys[kset.cur]
-	kset.keys[kset.cur] = kset.keys[kset.cur][:0]
-
-	kset.cur = (kset.cur + 1) & 0x1
-
-	return keys
-}
-
-//GC garbage clean struct
+// GC handles automatic expiration of entries in SafeMap using a heap-based scheduler.
 type GC struct {
-	storage safeMap.SafeMap
-	keyChan chan string
+	storage    safeMap.SafeMap
+	mu         sync.Mutex
+	pq         expiryHeap     // Min-heap of pending expirations
+	keyIndex   map[string]int // Map of keys to their heap index
+	timer      *time.Timer
+	stopSignal chan struct{}
+	wakeSignal chan struct{} // Signal to recalculate timer early
+	wg         sync.WaitGroup
+	options    gcOptions
 }
 
-//NewGC - singleton func, returns *GC struct
-func NewGC(ctx context.Context, store safeMap.SafeMap) *GC {
-	if loadInstance {
-		return gcInstance
+type gcOptions struct {
+	defaultPollInterval time.Duration // Fallback interval when heap is empty
+}
+
+// GCOption customizes GC behavior.
+type GCOption func(*gcOptions)
+
+// WithPollInterval sets the fallback sleep interval.
+func WithPollInterval(d time.Duration) GCOption {
+	return func(o *gcOptions) {
+		if d > 0 {
+			o.defaultPollInterval = d
+		}
+	}
+}
+
+// NewGC creates and starts a new GC instance.
+// Maintains the signature expected by mcache.go.
+func NewGC(ctx context.Context, store safeMap.SafeMap, opts ...GCOption) *GC {
+	options := gcOptions{defaultPollInterval: time.Minute}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
-	gc := new(GC)
-	gc.storage = store
-	gc.keyChan = make(chan string, 10000)
-	go gc.ExpireKey(ctx)
-	gcInstance = gc
-	loadInstance = true
+	gc := &GC{
+		storage:    store,
+		pq:         make(expiryHeap, 0),
+		keyIndex:   make(map[string]int),
+		stopSignal: make(chan struct{}),
+		wakeSignal: make(chan struct{}, 1),
+		options:    options,
+	}
+	heap.Init(&gc.pq)
+
+	gc.wg.Add(1)
+	go gc.run(ctx)
 
 	return gc
 }
 
-//LenBufferKeyChan - returns len usage buffet of keyChan chanel
-func (gc GC) LenBufferKeyChan() int {
-	return len(gc.keyChan)
-}
+// Expired schedules a key for expiration after the given duration.
+func (gc *GC) Expired(key string, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	expireAt := time.Now().Add(duration)
 
-//ExpireKey - collects foul keys, what to remove later
-func (gc GC) ExpireKey(ctx context.Context) {
-	kset := &keyset{cur: 0}
-	kset.keys[0] = make([]string, 0, 100)
-	kset.keys[1] = make([]string, 0, 100)
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
 
-	go gc.heartBeatGC(ctx, kset)
+	if idx, exists := gc.keyIndex[key]; exists {
+		gc.pq[idx].expireAt = expireAt
+		heap.Fix(&gc.pq, idx)
+	} else {
+		item := &expiryItem{key: key, expireAt: expireAt}
+		heap.Push(&gc.pq, item)
+		gc.keyIndex[key] = item.index
+	}
 
-	for {
-		select {
-		case key := <-gc.keyChan:
-			kset.append(key)
-
-		case <-ctx.Done():
-			loadInstance = false
-			return
-		}
+	// If this entry is now the earliest to expire, wake the run loop.
+	if len(gc.pq) > 0 && gc.pq[0].key == key {
+		gc.signalWakeUp()
 	}
 }
 
-//heartBeatGC removes old keys by timer
-func (gc GC) heartBeatGC(ctx context.Context, kset *keyset) {
-	//TODO it may be worthwhile to set a custom interval for deleting old keys
-	ticker := time.NewTicker(time.Second * 3)
+// run is the main loop that waits for and processes expirations.
+func (gc *GC) run(ctx context.Context) {
+	defer gc.wg.Done()
+	defer func() {
+		gc.mu.Lock()
+		if gc.timer != nil {
+			gc.timer.Stop()
+		}
+		gc.mu.Unlock()
+	}()
+
 	for {
-		select {
-		case <-ticker.C:
-			if kset.len() == 0 {
-				continue
+		nextInterval := gc.calculateNextWakeInterval()
+
+		gc.mu.Lock()
+		switch {
+		case nextInterval > 0:
+			if gc.timer == nil {
+				gc.timer = time.NewTimer(nextInterval)
+			} else {
+				if !gc.timer.Stop() {
+					select {
+					case <-gc.timer.C:
+					default:
+					}
+				}
+				gc.timer.Reset(nextInterval)
 			}
-			keys := kset.swap()
-			gc.storage.Flush(keys)
+			gc.mu.Unlock()
+		case nextInterval == 0:
+			gc.mu.Unlock()
+		default: // heap is empty
+			if gc.timer != nil {
+				if !gc.timer.Stop() {
+					select {
+					case <-gc.timer.C:
+					default:
+					}
+				}
+				gc.timer = nil
+			}
+			nextInterval = gc.options.defaultPollInterval
+			gc.mu.Unlock()
+		}
 
+		var timerC <-chan time.Time
+		gc.mu.Lock()
+		if gc.timer != nil && nextInterval > 0 {
+			timerC = gc.timer.C
+		}
+		gc.mu.Unlock()
+
+		processNow := nextInterval == 0
+
+		select {
 		case <-ctx.Done():
 			return
+		case <-gc.stopSignal:
+			return
+		case <-gc.wakeSignal:
+			continue
+		case <-timerC:
+			gc.processExpiredKeys()
+		default:
+			if processNow {
+				gc.processExpiredKeys()
+			} else if nextInterval < 0 {
+				select {
+				case <-time.After(gc.options.defaultPollInterval):
+				case <-ctx.Done():
+					return
+				case <-gc.stopSignal:
+					return
+				case <-gc.wakeSignal:
+					continue
+				}
+			}
 		}
 	}
 }
 
-//Expired - fund Expired, gorutine which is launched every time the method is called, and ensures that the key is removed from the repository after the time expires
-func (gc GC) Expired(ctx context.Context, key string, duration time.Duration) {
+func (gc *GC) calculateNextWakeInterval() time.Duration {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+
+	if len(gc.pq) == 0 {
+		return -1
+	}
+	delta := time.Until(gc.pq[0].expireAt)
+	if delta <= 0 {
+		return 0
+	}
+	return delta
+}
+
+// processExpiredKeys removes all entries whose expiration time has passed.
+func (gc *GC) processExpiredKeys() {
+	now := time.Now()
+	var keys []string
+
+	gc.mu.Lock()
+	for len(gc.pq) > 0 && !gc.pq[0].expireAt.After(now) {
+		expired := heap.Pop(&gc.pq).(*expiryItem)
+		delete(gc.keyIndex, expired.key)
+		keys = append(keys, expired.key)
+	}
+	gc.mu.Unlock()
+
+	if len(keys) > 0 {
+		gc.storage.Flush(keys)
+	}
+}
+
+func (gc *GC) signalWakeUp() {
 	select {
-	case <-time.After(duration):
-		gc.keyChan <- key
-		return
-	case <-ctx.Done():
-		return
+	case gc.wakeSignal <- struct{}{}:
+	default:
+	}
+}
+
+// Stop shuts down the GC loop gracefully.
+func (gc *GC) Stop() {
+	close(gc.stopSignal)
+	gc.wg.Wait()
+}
+
+// LenBufferKeyChan reports the number of pending expirations (for compatibility).
+func (gc *GC) LenBufferKeyChan() int {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	return len(gc.pq)
+}
+
+// Truncate clears all scheduled expirations.
+func (gc *GC) Truncate() {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	gc.pq = make(expiryHeap, 0)
+	gc.keyIndex = make(map[string]int)
+	if gc.timer != nil {
+		gc.timer.Stop()
+		gc.timer = nil
+	}
+}
+
+// RemoveKey removes a key from expiration tracking.
+func (gc *GC) RemoveKey(key string) {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+
+	if idx, ok := gc.keyIndex[key]; ok {
+		heap.Remove(&gc.pq, idx)
+		delete(gc.keyIndex, key)
+		for i, item := range gc.pq {
+			item.index = i
+			gc.keyIndex[item.key] = i
+		}
 	}
 }
