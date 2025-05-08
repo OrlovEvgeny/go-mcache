@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
+	
 	"github.com/OrlovEvgeny/go-mcache/item"
 )
 
@@ -71,7 +71,7 @@ func NewStorage(opts ...Option) SafeMap {
 	if cfg.shards <= 0 || (cfg.shards&(cfg.shards-1)) != 0 {
 		panic(errors.New("safeMap: shard count must be a positive power of two"))
 	}
-
+	
 	s := &Storage{
 		shards:    make([]*shard, cfg.shards),
 		shardMask: uint32(cfg.shards - 1),
@@ -150,10 +150,12 @@ func (s *Storage) Len() int { return int(s.size.Load()) }
 func (s *Storage) Truncate() {
 	for _, sh := range s.shards {
 		sh.mu.Lock()
+		if len(sh.m) > 0 {
+			s.size.Add(-int64(len(sh.m)))
+		}
 		sh.m = make(map[string]item.Item)
 		sh.mu.Unlock()
 	}
-	s.size.Store(0)
 }
 
 // Flush removes expired keys from the provided list.
