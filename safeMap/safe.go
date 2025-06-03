@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	
+
 	"github.com/OrlovEvgeny/go-mcache/item"
 )
 
@@ -32,7 +32,7 @@ type shard struct {
 type Storage struct {
 	shards    []*shard
 	shardMask uint32
-	size      atomic.Int64
+	size      int64 // MODIFIED HERE
 	// Expiration is handled externally via gcmap.
 }
 
@@ -71,7 +71,7 @@ func NewStorage(opts ...Option) SafeMap {
 	if cfg.shards <= 0 || (cfg.shards&(cfg.shards-1)) != 0 {
 		panic(errors.New("safeMap: shard count must be a positive power of two"))
 	}
-	
+
 	s := &Storage{
 		shards:    make([]*shard, cfg.shards),
 		shardMask: uint32(cfg.shards - 1),
@@ -113,7 +113,7 @@ func (s *Storage) Insert(key string, value interface{}) {
 	b := s.bucket(key)
 	b.mu.Lock()
 	if _, exists := b.m[key]; !exists {
-		s.size.Add(1)
+		atomic.AddInt64(&s.size, 1) // MODIFIED HERE
 	}
 	b.m[key] = it
 	b.mu.Unlock()
@@ -125,7 +125,7 @@ func (s *Storage) Delete(key string) {
 	b.mu.Lock()
 	if _, ok := b.m[key]; ok {
 		delete(b.m, key)
-		s.size.Add(-1)
+		atomic.AddInt64(&s.size, -1) // MODIFIED HERE
 	}
 	b.mu.Unlock()
 }
@@ -144,14 +144,14 @@ func (s *Storage) Find(key string) (interface{}, bool) {
 }
 
 // Len returns the current number of keys.
-func (s *Storage) Len() int { return int(s.size.Load()) }
+func (s *Storage) Len() int { return int(atomic.LoadInt64(&s.size)) } // MODIFIED HERE
 
 // Truncate clears all entries in all shards.
 func (s *Storage) Truncate() {
 	for _, sh := range s.shards {
 		sh.mu.Lock()
 		if len(sh.m) > 0 {
-			s.size.Add(-int64(len(sh.m)))
+			atomic.AddInt64(&s.size, -int64(len(sh.m))) // MODIFIED HERE
 		}
 		sh.m = make(map[string]item.Item)
 		sh.mu.Unlock()
@@ -167,7 +167,7 @@ func (s *Storage) Flush(keys []string) {
 		if it, ok := b.m[k]; ok {
 			if it.IsExpired(now) {
 				delete(b.m, k)
-				s.size.Add(-1)
+				atomic.AddInt64(&s.size, -1) // MODIFIED HERE
 			}
 		}
 		b.mu.Unlock()
@@ -182,7 +182,7 @@ func (s *Storage) RemoveIfExpired(key string, now time.Time) bool {
 	if it, ok := b.m[key]; ok {
 		if it.IsExpired(now) {
 			delete(b.m, key)
-			s.size.Add(-1)
+			atomic.AddInt64(&s.size, -1) // MODIFIED HERE
 			return true
 		}
 	}
@@ -191,7 +191,7 @@ func (s *Storage) RemoveIfExpired(key string, now time.Time) bool {
 
 // GetAllKeys returns all keys across all shards.
 func (s *Storage) GetAllKeys() []string {
-	keys := make([]string, 0, s.Len())
+	keys := make([]string, 0, s.Len()) // Len() is already modified
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k := range sh.m {
