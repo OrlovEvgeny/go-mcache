@@ -90,6 +90,13 @@ func NewGC(ctx context.Context, store safeMap.SafeMap, opts ...GCOption) *GC {
 	return gc
 }
 
+func (gc *GC) fix(idx int) {
+	heap.Fix(&gc.pq, idx)
+	for _, item := range gc.pq {
+		gc.keyIndex[item.key] = item.index
+	}
+}
+
 // Expired schedules a key for expiration after the given duration.
 func (gc *GC) Expired(key string, duration time.Duration) {
 	if duration <= 0 {
@@ -102,7 +109,7 @@ func (gc *GC) Expired(key string, duration time.Duration) {
 
 	if idx, exists := gc.keyIndex[key]; exists {
 		gc.pq[idx].expireAt = expireAt
-		heap.Fix(&gc.pq, idx)
+		gc.fix(idx)
 	} else {
 		item := &expiryItem{key: key, expireAt: expireAt}
 		heap.Push(&gc.pq, item)

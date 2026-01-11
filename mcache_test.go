@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"math/rand"
+
 	"github.com/OrlovEvgeny/go-mcache"
 )
 
@@ -129,4 +131,42 @@ func TestParallelAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestAccessOverwriteTTL(t *testing.T) {
+	cache := newCache()
+
+	const (
+		numKeys  = 100
+		totalOps = 1000
+		ttl      = 2 * time.Second
+	)
+
+	var wg sync.WaitGroup
+
+	// Pre-populate cache with some initial data
+	for i := 0; i < numKeys; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		cache.Set(key, key, ttl)
+	}
+
+	for i := 0; i < totalOps; i++ {
+		wg.Add(1)
+
+		time.Sleep(time.Duration(rand.Int()%20) * time.Millisecond)
+		go func(n int) {
+			defer wg.Done()
+
+			key := fmt.Sprintf("key-%d", n%numKeys)
+			cache.Set(key, key, ttl)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// We just waited on all the goroutines to finish, but the last ones should
+	// still be not expired.
+	if cache.Len() == 0 {
+		t.Error("Cache should not be empty after parallel operations")
+	}
 }
