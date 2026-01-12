@@ -41,8 +41,8 @@ func (h *expiryHeap) Pop() interface{} {
 type GC struct {
 	storage    safeMap.SafeMap
 	mu         sync.Mutex
-	pq         expiryHeap     // Min-heap of pending expirations
-	keyIndex   map[string]int // Map of keys to their heap index
+	pq         expiryHeap             // Min-heap of pending expirations
+	keys       map[string]*expiryItem // Map of keys to the pending expirations pointers
 	timer      *time.Timer
 	stopSignal chan struct{}
 	wakeSignal chan struct{} // Signal to recalculate timer early
@@ -77,7 +77,7 @@ func NewGC(ctx context.Context, store safeMap.SafeMap, opts ...GCOption) *GC {
 	gc := &GC{
 		storage:    store,
 		pq:         make(expiryHeap, 0),
-		keyIndex:   make(map[string]int),
+		keys:       make(map[string]*expiryItem),
 		stopSignal: make(chan struct{}),
 		wakeSignal: make(chan struct{}, 1),
 		options:    options,
@@ -90,13 +90,6 @@ func NewGC(ctx context.Context, store safeMap.SafeMap, opts ...GCOption) *GC {
 	return gc
 }
 
-func (gc *GC) fix(idx int) {
-	heap.Fix(&gc.pq, idx)
-	for _, item := range gc.pq {
-		gc.keyIndex[item.key] = item.index
-	}
-}
-
 // Expired schedules a key for expiration after the given duration.
 func (gc *GC) Expired(key string, duration time.Duration) {
 	if duration <= 0 {
@@ -107,13 +100,14 @@ func (gc *GC) Expired(key string, duration time.Duration) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 
-	if idx, exists := gc.keyIndex[key]; exists {
-		gc.pq[idx].expireAt = expireAt
-		gc.fix(idx)
+	if item, exists := gc.keys[key]; exists {
+		item.expireAt = expireAt
+		// The item.index is always up-to-date thanks to heap.Swap
+		heap.Fix(&gc.pq, item.index)
 	} else {
 		item := &expiryItem{key: key, expireAt: expireAt}
 		heap.Push(&gc.pq, item)
-		gc.keyIndex[key] = item.index
+		gc.keys[key] = item
 	}
 
 	// If this entry is now the earliest to expire, wake the run loop.
@@ -225,7 +219,7 @@ func (gc *GC) processExpiredKeys() {
 	gc.mu.Lock()
 	for len(gc.pq) > 0 && !gc.pq[0].expireAt.After(now) {
 		expired := heap.Pop(&gc.pq).(*expiryItem)
-		delete(gc.keyIndex, expired.key)
+		delete(gc.keys, expired.key)
 		keys = append(keys, expired.key)
 	}
 	gc.mu.Unlock()
@@ -260,7 +254,7 @@ func (gc *GC) Truncate() {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 	gc.pq = make(expiryHeap, 0)
-	gc.keyIndex = make(map[string]int)
+	gc.keys = make(map[string]*expiryItem)
 	if gc.timer != nil {
 		gc.timer.Stop()
 		gc.timer = nil
@@ -272,12 +266,8 @@ func (gc *GC) RemoveKey(key string) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
 
-	if idx, ok := gc.keyIndex[key]; ok {
-		heap.Remove(&gc.pq, idx)
-		delete(gc.keyIndex, key)
-		for i, item := range gc.pq {
-			item.index = i
-			gc.keyIndex[item.key] = i
-		}
+	if item, ok := gc.keys[key]; ok {
+		heap.Remove(&gc.pq, item.index)
+		delete(gc.keys, key)
 	}
 }
