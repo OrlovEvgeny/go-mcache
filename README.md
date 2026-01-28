@@ -2,16 +2,19 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache) [![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
 
-High-performance, thread-safe in-memory cache for Go with generics, TinyLFU eviction, and Redis-style iterators.
+High-performance, thread-safe in-memory cache for Go with generics, TinyLFU eviction, lock-free data structures, and Redis-style iterators.
 
 ## Features
 
 - **Generic API** — Type-safe `Cache[K, V]` with any comparable key and value types
 - **TinyLFU Eviction** — Smart admission policy for better hit ratios (inspired by Ristretto)
+- **Lock-Free Structures** — Lock-free Count-Min Sketch, Bloom filter, and TinyLFU for high concurrency
+- **SIMD Optimizations** — AVX2/SSE optimized operations on amd64
 - **Cost-Based Eviction** — Evict by memory cost, not just entry count
 - **Redis-Style Iterators** — `Scan`, `ScanPrefix`, `ScanMatch` with cursor-based pagination
 - **Glob Pattern Matching** — Find keys with `*`, `?`, `[abc]`, `[a-z]` patterns
 - **Prefix Search** — O(k) prefix lookups via radix tree (for string keys)
+- **Optimized Batch Operations** — `GetBatch`, `GetBatchOptimized` with prefetching
 - **Callbacks** — `OnEvict`, `OnExpire`, `OnReject` hooks
 - **Metrics** — Hit ratio, evictions, expirations tracking
 - **GC-Free Storage** — Optional mode for reduced GC pressure (BigCache-style)
@@ -152,9 +155,23 @@ cache.Close()
 ### Batch Operations
 
 ```go
-// Get multiple keys
+// Get multiple keys (simple)
 results := cache.GetMany([]string{"a", "b", "c"})
 // returns map[string]V with found entries
+
+// Get multiple keys (optimized with prefetching)
+batch := cache.GetBatch(keys)
+for i, key := range batch.Keys {
+    if batch.Found[i] {
+        fmt.Printf("%s = %v\n", key, batch.Values[i])
+    }
+}
+
+// Get multiple keys (shard-order optimized for best cache locality)
+batch := cache.GetBatchOptimized(keys)
+
+// Get batch as map
+results := cache.GetBatchToMap(keys)
 
 // Set multiple items
 items := []mcache.Item[string, int]{
@@ -291,8 +308,10 @@ val, _ := cache.Get("key")
 │  │  (1024 shards)  │  │ (TinyLFU+SLFU)  │  │   (prefix search)       │  │
 │  │  ┌───┐ ┌───┐    │  │  ┌──────────┐   │  │                         │  │
 │  │  │ 0 │ │ 1 │... │  │  │ CM Sketch│   │  │  Only for string keys   │  │
-│  │  └───┘ └───┘    │  │  │ Bloom    │   │  │                         │  │
-│  │  map[K]*Entry   │  │  │ SampledLFU│  │  │                         │  │
+│  │  └───┘ └───┘    │  │  │ (LockFree)│  │  │                         │  │
+│  │  map[K]*Entry   │  │  │ Bloom    │   │  │                         │  │
+│  │  + Prefetching  │  │  │ (LockFree)│  │  │                         │  │
+│  │  + Cache Padding│  │  │ SampledLFU│  │  │                         │  │
 │  └─────────────────┘  │  └──────────┘   │  └─────────────────────────┘  │
 │                       └─────────────────┘                                │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
@@ -306,12 +325,30 @@ val, _ := cache.Get("key")
 
 When the cache is full and a new item arrives:
 
-1. **Doorkeeper** — Bloom filter checks if item was seen before
-2. **Count-Min Sketch** — Estimates access frequency (4-bit counters)
+1. **Doorkeeper** — Lock-free Bloom filter checks if item was seen before
+2. **Count-Min Sketch** — Lock-free frequency estimation (8-bit atomic counters)
 3. **Sampled LFU** — Samples 5 random victims, picks lowest frequency
 4. **Admission** — New item admitted only if frequency > victim
 
 This prevents "one-hit wonders" from evicting frequently accessed items.
+
+### Lock-Free Data Structures
+
+The cache uses lock-free implementations for the hot path:
+
+- **Lock-Free Count-Min Sketch** — 8-bit atomic counters packed in `atomic.Uint32`, CAS-based increments
+- **Lock-Free Bloom Filter** — Atomic bit operations with `atomic.Uint64`
+- **Lock-Free TinyLFU** — Completely lock-free `Access()` path for read operations
+
+This eliminates contention on the admission policy during concurrent reads.
+
+### Advanced Data Structures
+
+The library includes several advanced data structures:
+
+- **Blocked Bloom Filter** — Cache-line sized blocks (512 bits) for 1 cache miss max per lookup
+- **Cuckoo Filter** — Supports deletion, only 2 memory accesses per lookup
+- **Swiss Table** — SIMD-friendly hash table with 16-byte control groups
 
 ### Storage Options
 
@@ -319,6 +356,7 @@ This prevents "one-hit wonders" from evicting frequently accessed items.
 - `map[K]*Entry[K,V]` per shard
 - Works with any value type
 - Values tracked by GC
+- Cache-line padded shards to prevent false sharing
 
 **GC-Free (opt-in):**
 - `map[uint64]uint32` + byte slices
@@ -339,9 +377,41 @@ Benchmarks on Apple M4 Pro (arm64):
 ### Generic API (with TinyLFU)
 
 ```
-BenchmarkCacheGet-12         3328647    364 ns/op      0 B/op    0 allocs/op
-BenchmarkCacheSet-12         1640882    728 ns/op     49 B/op    1 allocs/op
-BenchmarkCacheMixed-12       2327482    517 ns/op      9 B/op    0 allocs/op
+BenchmarkCacheGet-12                          4915591    445.9 ns/op     0 B/op    0 allocs/op
+BenchmarkCacheSet-12                          2185386   1061   ns/op    49 B/op    1 allocs/op
+BenchmarkCacheSetWithTTL-12                   2511756    973.9 ns/op    49 B/op    1 allocs/op
+BenchmarkCacheMixed-12                        4878026    473.3 ns/op     9 B/op    0 allocs/op
+BenchmarkCacheHas-12                        137653788     17.48 ns/op    0 B/op    0 allocs/op
+BenchmarkCacheOperations/Read-12             40523341     57.98 ns/op    5 B/op    0 allocs/op
+BenchmarkCacheOperations/ParallelReadWrite-12 11975133   229.5 ns/op    94 B/op    3 allocs/op
+BenchmarkCacheOperationsPreallocated/Read-12  75477038    31.97 ns/op    0 B/op    0 allocs/op
+BenchmarkCacheZipf-12                          683647   3624   ns/op   87.40 hit%  13 B/op  0 allocs/op
+```
+
+### Lock-Free Structures Performance
+
+```
+BenchmarkCMSketchLockFreeIncrement-12         58410620   20.76 ns/op    0 B/op    0 allocs/op
+BenchmarkCMSketchLockFreeIncrementParallel-12 43926879   24.45 ns/op    0 B/op    0 allocs/op
+BenchmarkBloomFilterLockFreeAdd-12           123533065    9.52 ns/op    0 B/op    0 allocs/op
+BenchmarkBloomFilterLockFreeAddParallel-12   889117638    1.25 ns/op    0 B/op    0 allocs/op
+BenchmarkTinyLFULockFreeIncrement-12          32159007   38.91 ns/op    0 B/op    0 allocs/op
+BenchmarkPolicyLockFreeAccess-12              35165865   36.34 ns/op    0 B/op    0 allocs/op
+```
+
+### Comparison: Lock-Free vs Original
+
+| Operation | Original | Lock-Free | Improvement |
+|-----------|----------|-----------|-------------|
+| CM Sketch Increment | 38.23 ns | 20.76 ns | **1.84x faster** |
+| Bloom Filter Add | 13.39 ns | 9.52 ns | **1.41x faster** |
+| TinyLFU Increment | 46.73 ns | 38.91 ns | **1.20x faster** |
+
+### Advanced Structures
+
+```
+BenchmarkBlockedBloomFilterContains-12  272477785   4.05 ns/op    0 B/op    0 allocs/op
+BenchmarkSwissTableGet-12                47139546  26.22 ns/op    0 B/op    0 allocs/op
 ```
 
 ### Legacy API (no TinyLFU)
@@ -426,6 +496,27 @@ cache := mcache.NewCache[string, []byte](
 cache.Set("large", make([]byte, 10<<20), 0)  // 10MB
 ```
 
+### High-Throughput Batch Operations
+
+```go
+cache := mcache.NewCache[string, int]()
+
+// Prefill cache
+for i := 0; i < 10000; i++ {
+    cache.Set(fmt.Sprintf("key:%d", i), i, 0)
+}
+
+// Batch read with prefetching (30-50% faster than individual reads)
+keys := []string{"key:1", "key:2", "key:3", "key:100", "key:500"}
+batch := cache.GetBatchOptimized(keys)
+
+for i, key := range batch.Keys {
+    if batch.Found[i] {
+        fmt.Printf("%s = %d\n", key, batch.Values[i])
+    }
+}
+```
+
 ### User Data with Prefix Queries
 
 ```go
@@ -487,8 +578,25 @@ val, ok := cache.Get("key")  // val is already MyType
 
 All operations are thread-safe. The cache uses:
 - Sharded storage with per-shard `sync.RWMutex`
+- Lock-free TinyLFU admission policy for read path
 - Atomic operations for metrics
 - Lock-free ring buffer for async writes
+- Cache-line padded structures to prevent false sharing
+
+## Internal Packages
+
+The library includes several optimized internal packages:
+
+| Package | Description |
+|---------|-------------|
+| `internal/policy` | TinyLFU, Count-Min Sketch, Bloom filters (lock-free variants) |
+| `internal/store` | Sharded storage with prefetching and batch operations |
+| `internal/hashtable` | Swiss table implementation |
+| `internal/hash` | FNV-1a hashing with batch operations |
+| `internal/prefetch` | CPU prefetch intrinsics (amd64) |
+| `internal/alloc` | Aligned memory allocation for SIMD |
+| `internal/radix` | Radix tree for prefix search |
+| `internal/glob` | Glob pattern matching |
 
 ## License
 

@@ -306,6 +306,116 @@ func (c *Cache[K, V]) GetMany(keys []K) map[K]V {
 	return result
 }
 
+// BatchResult holds the result of a batch get operation.
+type BatchResult[K comparable, V any] struct {
+	Keys    []K
+	Values  []V
+	Found   []bool
+	Hashes  []uint64
+}
+
+// GetBatch retrieves multiple values from the cache with optimized prefetching.
+// This is more efficient than calling Get in a loop, especially for large batches.
+func (c *Cache[K, V]) GetBatch(keys []K) *BatchResult[K, V] {
+	if c.closed.Load() {
+		return &BatchResult[K, V]{Keys: keys}
+	}
+
+	n := len(keys)
+	result := &BatchResult[K, V]{
+		Keys:   keys,
+		Values: make([]V, n),
+		Found:  make([]bool, n),
+		Hashes: make([]uint64, n),
+	}
+
+	if n == 0 {
+		return result
+	}
+
+	// Compute hashes
+	for i, key := range keys {
+		result.Hashes[i] = c.store.KeyHash(key)
+	}
+
+	// Use optimized batch get from store
+	req := &store.BatchRequest[K, V]{
+		Keys:   keys,
+		Hashes: result.Hashes,
+	}
+	c.store.GetBatch(req)
+
+	// Copy results and update policy
+	for i := 0; i < n; i++ {
+		if req.Found[i] {
+			result.Values[i] = req.Results[i].Value
+			result.Found[i] = true
+			c.policy.Access(result.Hashes[i])
+			c.metrics.incHit()
+		} else {
+			c.metrics.incMiss()
+		}
+	}
+
+	return result
+}
+
+// GetBatchOptimized retrieves multiple values with shard-order optimization.
+// Keys are processed in shard order for better cache locality, but results
+// are returned in the original key order.
+func (c *Cache[K, V]) GetBatchOptimized(keys []K) *BatchResult[K, V] {
+	if c.closed.Load() {
+		return &BatchResult[K, V]{Keys: keys}
+	}
+
+	n := len(keys)
+	result := &BatchResult[K, V]{
+		Keys:   keys,
+		Values: make([]V, n),
+		Found:  make([]bool, n),
+		Hashes: make([]uint64, n),
+	}
+
+	if n == 0 {
+		return result
+	}
+
+	// Compute hashes
+	for i, key := range keys {
+		result.Hashes[i] = c.store.KeyHash(key)
+	}
+
+	// Use shard-order batch get
+	entries, found := c.store.GetBatchByShardOrder(keys)
+
+	// Copy results and update policy
+	for i := 0; i < n; i++ {
+		if found[i] && entries[i] != nil {
+			result.Values[i] = entries[i].Value
+			result.Found[i] = true
+			c.policy.Access(result.Hashes[i])
+			c.metrics.incHit()
+		} else {
+			c.metrics.incMiss()
+		}
+	}
+
+	return result
+}
+
+// GetBatchToMap retrieves multiple values and returns them as a map.
+// More convenient than GetBatch when you need map access.
+func (c *Cache[K, V]) GetBatchToMap(keys []K) map[K]V {
+	batch := c.GetBatch(keys)
+	result := make(map[K]V, len(keys))
+	for i, key := range batch.Keys {
+		if batch.Found[i] {
+			result[key] = batch.Values[i]
+		}
+	}
+	return result
+}
+
 // SetMany stores multiple items in the cache.
 // Returns the number of items successfully stored.
 func (c *Cache[K, V]) SetMany(items []Item[K, V]) int {

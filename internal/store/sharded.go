@@ -4,14 +4,22 @@ package store
 import (
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
 	"github.com/OrlovEvgeny/go-mcache/internal/hash"
+	"github.com/OrlovEvgeny/go-mcache/internal/prefetch"
 )
 
 const (
 	// DefaultShardCount is the default number of shards.
 	DefaultShardCount = 1024
+
+	// cacheLineSize is the typical CPU cache line size.
+	cacheLineSize = 64
+
+	// prefetchDistance is the number of shards to prefetch ahead in batch operations.
+	prefetchDistance = 4
 )
 
 // Entry represents a cache entry.
@@ -29,10 +37,17 @@ func (e *Entry[K, V]) IsExpired() bool {
 }
 
 // shard represents a single shard of the sharded store.
+// Optimized with cache line padding to prevent false sharing between shards.
 type shard[K comparable, V any] struct {
-	mu sync.RWMutex
-	m  map[K]*Entry[K, V]
-	_  [64 - 8]byte // Cache line padding to prevent false sharing
+	// Hot data: frequently accessed together
+	mu sync.RWMutex          // 24 bytes on 64-bit
+	m  map[K]*Entry[K, V]    // 8 bytes (pointer to map header)
+	_  [cacheLineSize - 32]byte // Pad to cache line boundary
+
+	// Statistics on separate cache line to avoid contention
+	hits   atomic.Uint64
+	misses atomic.Uint64
+	_      [cacheLineSize - 16]byte // Pad statistics to separate cache line
 }
 
 // ShardedStore is a sharded in-memory store.
@@ -131,19 +146,25 @@ func (s *ShardedStore[K, V]) Get(key K) (*Entry[K, V], bool) {
 	keyHash := s.getKeyHash(key)
 	sh := s.getShard(keyHash)
 
+	// Prefetch the map header before acquiring lock
+	prefetch.PrefetchT0(unsafe.Pointer(&sh.m))
+
 	sh.mu.RLock()
 	entry, exists := sh.m[key]
 	sh.mu.RUnlock()
 
 	if !exists {
+		sh.misses.Add(1)
 		return nil, false
 	}
 
 	// Check expiration
 	if entry.ExpireAt > 0 && clock.NowNano() > entry.ExpireAt {
+		sh.misses.Add(1)
 		return nil, false
 	}
 
+	sh.hits.Add(1)
 	return entry, true
 }
 
@@ -151,19 +172,25 @@ func (s *ShardedStore[K, V]) Get(key K) (*Entry[K, V], bool) {
 func (s *ShardedStore[K, V]) GetByHash(key K, keyHash uint64) (*Entry[K, V], bool) {
 	sh := s.getShard(keyHash)
 
+	// Prefetch the map header before acquiring lock
+	prefetch.PrefetchT0(unsafe.Pointer(&sh.m))
+
 	sh.mu.RLock()
 	entry, exists := sh.m[key]
 	sh.mu.RUnlock()
 
 	if !exists {
+		sh.misses.Add(1)
 		return nil, false
 	}
 
 	// Check expiration
 	if entry.ExpireAt > 0 && clock.NowNano() > entry.ExpireAt {
+		sh.misses.Add(1)
 		return nil, false
 	}
 
+	sh.hits.Add(1)
 	return entry, true
 }
 
@@ -396,4 +423,182 @@ func (s *ShardedStore[K, V]) Scan(cursor uint64, count int) ([]*Entry[K, V], uin
 // KeyHash returns the hash function used by this store.
 func (s *ShardedStore[K, V]) KeyHash(key K) uint64 {
 	return s.getKeyHash(key)
+}
+
+// BatchRequest represents a batch get request.
+type BatchRequest[K comparable, V any] struct {
+	Keys    []K
+	Hashes  []uint64 // Pre-computed hashes (optional)
+	Results []*Entry[K, V]
+	Found   []bool
+}
+
+// GetBatch retrieves multiple entries with optimized prefetching.
+// This is more efficient than calling Get in a loop.
+func (s *ShardedStore[K, V]) GetBatch(req *BatchRequest[K, V]) {
+	n := len(req.Keys)
+	if n == 0 {
+		return
+	}
+
+	// Ensure results slices are properly sized
+	if len(req.Results) < n {
+		req.Results = make([]*Entry[K, V], n)
+	}
+	if len(req.Found) < n {
+		req.Found = make([]bool, n)
+	}
+
+	// Compute hashes if not provided
+	if len(req.Hashes) < n {
+		req.Hashes = make([]uint64, n)
+		for i, key := range req.Keys {
+			req.Hashes[i] = s.getKeyHash(key)
+		}
+	}
+
+	now := clock.NowNano()
+
+	// Process with prefetching
+	for i := 0; i < n; i++ {
+		// Prefetch upcoming shards
+		if i+prefetchDistance < n {
+			futureHash := req.Hashes[i+prefetchDistance]
+			futureShard := s.shards[futureHash&s.shardMask]
+			prefetch.PrefetchT0(unsafe.Pointer(&futureShard.m))
+		}
+
+		keyHash := req.Hashes[i]
+		sh := s.getShard(keyHash)
+
+		sh.mu.RLock()
+		entry, exists := sh.m[req.Keys[i]]
+		sh.mu.RUnlock()
+
+		if !exists {
+			req.Results[i] = nil
+			req.Found[i] = false
+			sh.misses.Add(1)
+			continue
+		}
+
+		// Check expiration
+		if entry.ExpireAt > 0 && now > entry.ExpireAt {
+			req.Results[i] = nil
+			req.Found[i] = false
+			sh.misses.Add(1)
+			continue
+		}
+
+		req.Results[i] = entry
+		req.Found[i] = true
+		sh.hits.Add(1)
+	}
+}
+
+// GetBatchByShardOrder retrieves entries sorted by shard for better cache locality.
+// Returns results in the original key order.
+func (s *ShardedStore[K, V]) GetBatchByShardOrder(keys []K) ([]*Entry[K, V], []bool) {
+	n := len(keys)
+	if n == 0 {
+		return nil, nil
+	}
+
+	// Compute hashes and shard indices
+	type keyInfo struct {
+		key       K
+		hash      uint64
+		shardIdx  uint64
+		origIndex int
+	}
+
+	infos := make([]keyInfo, n)
+	for i, key := range keys {
+		h := s.getKeyHash(key)
+		infos[i] = keyInfo{
+			key:       key,
+			hash:      h,
+			shardIdx:  h & s.shardMask,
+			origIndex: i,
+		}
+	}
+
+	// Sort by shard index for cache locality
+	// Simple insertion sort for small batches, good enough for typical sizes
+	for i := 1; i < n; i++ {
+		j := i
+		for j > 0 && infos[j].shardIdx < infos[j-1].shardIdx {
+			infos[j], infos[j-1] = infos[j-1], infos[j]
+			j--
+		}
+	}
+
+	results := make([]*Entry[K, V], n)
+	found := make([]bool, n)
+	now := clock.NowNano()
+
+	// Process in shard order with prefetching
+	for i := 0; i < n; i++ {
+		info := &infos[i]
+
+		// Prefetch upcoming shards
+		if i+prefetchDistance < n {
+			futureShard := s.shards[infos[i+prefetchDistance].shardIdx]
+			prefetch.PrefetchT0(unsafe.Pointer(&futureShard.m))
+		}
+
+		sh := s.shards[info.shardIdx]
+
+		sh.mu.RLock()
+		entry, exists := sh.m[info.key]
+		sh.mu.RUnlock()
+
+		origIdx := info.origIndex
+
+		if !exists {
+			results[origIdx] = nil
+			found[origIdx] = false
+			sh.misses.Add(1)
+			continue
+		}
+
+		if entry.ExpireAt > 0 && now > entry.ExpireAt {
+			results[origIdx] = nil
+			found[origIdx] = false
+			sh.misses.Add(1)
+			continue
+		}
+
+		results[origIdx] = entry
+		found[origIdx] = true
+		sh.hits.Add(1)
+	}
+
+	return results, found
+}
+
+// ShardStats returns hit/miss statistics for a shard.
+func (s *ShardedStore[K, V]) ShardStats(shardIdx int) (hits, misses uint64) {
+	if shardIdx < 0 || shardIdx >= len(s.shards) {
+		return 0, 0
+	}
+	sh := s.shards[shardIdx]
+	return sh.hits.Load(), sh.misses.Load()
+}
+
+// TotalStats returns aggregate hit/miss statistics across all shards.
+func (s *ShardedStore[K, V]) TotalStats() (hits, misses uint64) {
+	for _, sh := range s.shards {
+		hits += sh.hits.Load()
+		misses += sh.misses.Load()
+	}
+	return hits, misses
+}
+
+// ResetStats resets all shard statistics.
+func (s *ShardedStore[K, V]) ResetStats() {
+	for _, sh := range s.shards {
+		sh.hits.Store(0)
+		sh.misses.Store(0)
+	}
 }
