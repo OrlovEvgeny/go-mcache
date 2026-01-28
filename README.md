@@ -2,119 +2,98 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache) [![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
 
-High-performance, thread-safe in-memory key-value cache with expiration support and minimal GC pressure.
-
-## Features
-
-* **Sharded storage**: 256 configurable shards for lock contention reduction and horizontal scalability.
-* **Single expiration scheduler**: One background goroutine and min-heap for all TTL handling, eliminating per-key timers.
-* **Zero-allocation hot path**: Pooled entries and direct value storage avoid reflection and reduce GC churn.
-* **Atomic counters**: O(1) length retrieval without iterating shards.
-* **Standard interface**: Drop‑in replacement for `map[string]interface{}` with methods:
-
-    * `Set(key string, value interface{}, ttl time.Duration) error`
-    * `Get(key string) (value interface{}, ok bool)`
-    * `Delete(key string)`
-    * `Len() int`
-    * `Close() map[string]interface{}`
-* **Graceful shutdown**: `Close` stops expiration scheduler and returns remaining items.
-* **Customization options**:
-
-    * `WithShardCount(n int)` to adjust shard count (power of two).
-    * `WithPollInterval(d time.Duration)` to set GC polling interval.
-* **Extensive tests & benchmarks**: Built‑in race‑safe tests and microbenchmarks for throughput analysis.
+Thread-safe in-memory cache for Go with TTL support.
 
 ## Installation
 
 ```bash
-go get -u github.com/OrlovEvgeny/go-mcache
+go get github.com/OrlovEvgeny/go-mcache
 ```
 
-## Usage
+## Quick Start
 
 ```go
-package main
+cache := mcache.New()
+defer cache.Close()
 
-import (
-	"fmt"
-	"log"
-	"time"
+cache.Set("key", "value", 5*time.Minute)
 
-	"github.com/OrlovEvgeny/go-mcache"
-)
-
-type User struct {
-	Name string
-	Age  int
-}
-
-func main() {
-	// Create cache with default settings (256 shards)
-	cache := mcache.New()
-	defer func() {
-		// Stop internal scheduler and retrieve remaining items
-		items := cache.Close()
-		fmt.Printf("Remaining entries: %d\n", len(items))
-	}()
-
-	// Store a struct pointer with 20-minute TTL
-	key := "user:123"
-	user := &User{Name: "Alice", Age: 30}
-	if err := cache.Set(key, user, 20*time.Minute); err != nil {
-		log.Fatalf("Set error: %v", err)
-	}
-
-	// Retrieve value
-	if v, ok := cache.Get(key); ok {
-		loaded := v.(*User)
-		fmt.Printf("Loaded user: %s (age %d)\n", loaded.Name, loaded.Age)
-	} else {
-		fmt.Println("Key expired or not found")
-	}
-
-	// Delete entry
-	cache.Delete(key)
+if val, ok := cache.Get("key"); ok {
+    fmt.Println(val)
 }
 ```
 
-## Advanced Configuration
+## Architecture
 
-```go
-// 512 shards and 30s GC interval
-cache := mcache.New(
-	mcache.WithShardCount(512),
-	mcache.WithPollInterval(30*time.Second),
-)
+```
+┌─────────────────────────────────────────────────────────┐
+│                     CacheDriver                         │
+├─────────────────────────────────────────────────────────┤
+│  Storage (1024 shards)          │  GC (single goroutine)│
+│  ┌─────┐ ┌─────┐     ┌─────┐   │  ┌─────────────────┐  │
+│  │shard│ │shard│ ... │shard│   │  │   min-heap      │  │
+│  │  0  │ │  1  │     │ N-1 │   │  │  (expirations)  │  │
+│  └─────┘ └─────┘     └─────┘   │  └─────────────────┘  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Benchmarks
+Storage is split into 1024 shards (configurable, must be power of 2). Each shard has its own `sync.RWMutex`. Key-to-shard mapping uses FNV-1a hash computed without allocations.
 
+Expiration is handled by a single background goroutine with a min-heap. No per-key timers, no polling — the GC sleeps until the next expiration time.
+
+## API
+
+```go
+// Create
+cache := mcache.New()
+
+// Write (ttl=0 means no expiration)
+cache.Set(key string, value interface{}, ttl time.Duration) error
+
+// Read
+cache.Get(key string) (interface{}, bool)
+
+// Delete
+cache.Remove(key string)
+
+// Count
+cache.Len() int
+
+// Clear all
+cache.Truncate()
+
+// Shutdown (returns remaining entries)
+cache.Close() map[string]interface{}
+```
+
+## Performance
+
+Benchmarks on Apple M4 Pro (arm64):
+
+```
+BenchmarkCacheOperationsPreallocated/Write-12       6103268    216 ns/op    71 B/op    1 allocs/op
+BenchmarkCacheOperationsPreallocated/Read-12       55988211     21 ns/op     0 B/op    0 allocs/op
+BenchmarkCacheOperationsPreallocated/WriteRead-12   5674326    242 ns/op    71 B/op    1 allocs/op
+BenchmarkCacheOperationsPreallocated/ParallelRW-12  6378766    193 ns/op    71 B/op    1 allocs/op
+```
+
+Read path is zero-allocation. Write allocates one `Item` struct (71 bytes).
+
+Run benchmarks:
 ```bash
-go test -bench . -benchmem
+go test -bench=. -benchmem
 ```
 
-Typical results on Apple M1 Pro:
+## Implementation Details
 
-```
-goos: darwin
-goarch: arm64
-pkg: github.com/OrlovEvgeny/go-mcache
-cpu: Apple M1 Pro
-BenchmarkCacheOperations
-BenchmarkCacheOperations/Write
-BenchmarkCacheOperations/Write-8         	 1836590	       663.0 ns/op	     605 B/op	       3 allocs/op
-BenchmarkCacheOperations/Read
-BenchmarkCacheOperations/Read-8          	 6350031	       167.5 ns/op	      85 B/op	       1 allocs/op
-BenchmarkCacheOperations/WriteRead
-BenchmarkCacheOperations/WriteRead-8     	 1786278	       704.6 ns/op	     665 B/op	       4 allocs/op
-BenchmarkCacheOperations/ParallelReadWrite
-BenchmarkCacheOperations/ParallelReadWrite-8         	 4477581	       288.0 ns/op	     227 B/op	       5 allocs/op
-```
+**Hashing**: FNV-1a computed inline without `hash.Hash` interface overhead.
 
-## Contributing
+**Time handling**: Uses cached `time.Now()` updated every 1ms in a background goroutine. Expiration timestamps stored as `int64` (Unix nano) instead of `time.Time` for faster comparisons.
 
-Contributions are welcome! Please fork, improve, and submit pull requests. Ensure new code includes tests and adheres to Go standards (go fmt, go vet).
+**Memory layout**: Items stored as pointers in maps. Shards have 64-byte padding to prevent false sharing on cache lines.
+
+**GC**: Single goroutine, min-heap ordered by expiration time. Wakes only when needed, no periodic polling when heap is empty.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT

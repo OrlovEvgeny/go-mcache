@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/OrlovEvgeny/go-mcache/gcmap"
+	"github.com/OrlovEvgeny/go-mcache/internal/clock"
 	"github.com/OrlovEvgeny/go-mcache/item"
 	"github.com/OrlovEvgeny/go-mcache/safeMap"
 )
@@ -48,21 +49,17 @@ func New() *CacheDriver {
 
 // Get retrieves a value by key. Returns (value, true) if found and not expired.
 func (mc *CacheDriver) Get(key string) (interface{}, bool) {
-	data, ok := mc.storage.Find(key)
-	if !ok {
-		return nil, false
-	}
-	entity, ok := data.(item.Item)
+	entity, ok := mc.storage.FindItem(key)
 	if !ok {
 		return nil, false
 	}
 
 	// Handle non-expiring entries.
-	if entity.Expire.IsZero() {
+	if entity.ExpireAt == 0 {
 		return entity.DataLink, true
 	}
-	// Passive expiration check.
-	if entity.IsExpired(time.Now()) {
+	// Passive expiration check using cached time.
+	if entity.IsExpired(clock.NowNano()) {
 		return nil, false
 	}
 	return entity.DataLink, true
@@ -70,21 +67,20 @@ func (mc *CacheDriver) Get(key string) (interface{}, bool) {
 
 // Set inserts or updates a key with the given value and TTL.
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
-	var expireTime time.Time
-	if ttl == TTL_FOREVER || ttl <= 0 {
-		expireTime = time.Time{}
-	} else {
-		expireTime = time.Now().Add(ttl)
+	var expireAt int64
+	if ttl > 0 {
+		expireAt = clock.NowNano() + int64(ttl)
 	}
 
-	cacheItem := item.Item{
+	cacheItem := &item.Item{
 		Key:      key,
-		Expire:   expireTime,
+		ExpireAt: expireAt,
 		DataLink: value,
 	}
-	mc.storage.Insert(key, cacheItem)
 
-	if !expireTime.IsZero() {
+	mc.storage.InsertItem(key, cacheItem)
+
+	if expireAt > 0 {
 		mc.gc.Expired(key, ttl)
 	} else {
 		// Remove any existing expiration if setting to infinite.

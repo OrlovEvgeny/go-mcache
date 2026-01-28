@@ -2,50 +2,44 @@ package safeMap
 
 import (
 	"errors"
-	"hash/fnv"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/OrlovEvgeny/go-mcache/internal/clock"
 	"github.com/OrlovEvgeny/go-mcache/item"
 )
 
 const (
-	defaultShardCount = 256
+	defaultShardCount    = 1024
+	defaultMapPrealloc   = 256
 )
-
-// cacheEntry holds a cache item and optional metadata.
-// A separate pool isn't used because item.Item is passed externally.
-// Internal allocation is unnecessary in this setup.
-type cacheEntry struct {
-	it item.Item
-	// Metadata (e.g., access timestamp for LRU) could be added if needed.
-}
 
 // shard represents a single bucket in the sharded map.
 type shard struct {
 	mu sync.RWMutex
-	m  map[string]item.Item
+	m  map[string]*item.Item
+	_  [64 - 8]byte // Cache line padding to prevent false sharing
 }
 
 // Storage implements the sharded in-memory cache.
 type Storage struct {
 	shards    []*shard
 	shardMask uint32
-	size      int64 // MODIFIED HERE
-	// Expiration is handled externally via gcmap.
+	size      int64
 }
 
 // SafeMap defines the interface expected by mcache.go and gcmap.
 type SafeMap interface {
 	Insert(key string, value interface{})
+	InsertItem(key string, it *item.Item)
 	Delete(key string)
 	Truncate()
-	Flush(keys []string)
+	FlushKeys(keys []string, nowNano int64)
 	Find(key string) (interface{}, bool)
+	FindItem(key string) (*item.Item, bool)
 	Len() int
 	Close() map[string]interface{}
-	RemoveIfExpired(key string, now time.Time) bool
+	RemoveIfExpired(key string, nowNano int64) bool
 	GetAllKeys() []string
 }
 
@@ -77,7 +71,7 @@ func NewStorage(opts ...Option) SafeMap {
 		shardMask: uint32(cfg.shards - 1),
 	}
 	for i := range s.shards {
-		s.shards[i] = &shard{m: make(map[string]item.Item)}
+		s.shards[i] = &shard{m: make(map[string]*item.Item, defaultMapPrealloc)}
 	}
 	return s
 }
@@ -85,13 +79,11 @@ func NewStorage(opts ...Option) SafeMap {
 var _ SafeMap = (*Storage)(nil)
 
 func (s *Storage) bucket(key string) *shard {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(key))
-	return s.shards[h.Sum32()&s.shardMask]
+	return s.shards[s.bucketIndex(key)]
 }
 
 // bucketIndex computes FNV-1a hash of key without allocations.
-func (c *Storage) bucketIndex(key string) uint32 {
+func (s *Storage) bucketIndex(key string) uint32 {
 	const (
 		offset = 2166136261
 		prime  = 16777619
@@ -101,19 +93,34 @@ func (c *Storage) bucketIndex(key string) uint32 {
 		h ^= uint32(key[i])
 		h *= prime
 	}
-	return h & c.shardMask
+	return h & s.shardMask
 }
 
 // Insert adds or replaces a key with a given item.Item value.
+// Accepts interface{} for backward compatibility.
 func (s *Storage) Insert(key string, value interface{}) {
-	it, ok := value.(item.Item)
-	if !ok {
-		return
+	switch v := value.(type) {
+	case *item.Item:
+		s.InsertItem(key, v)
+	case item.Item:
+		// Legacy support: convert value to pointer
+		it := &item.Item{
+			Key:      v.Key,
+			ExpireAt: v.ExpireAt,
+			Data:     v.Data,
+			DataLink: v.DataLink,
+		}
+		s.InsertItem(key, it)
 	}
+}
+
+// InsertItem adds or replaces a key with a given *item.Item pointer.
+// This is the optimized path that avoids allocations.
+func (s *Storage) InsertItem(key string, it *item.Item) {
 	b := s.bucket(key)
 	b.mu.Lock()
 	if _, exists := b.m[key]; !exists {
-		atomic.AddInt64(&s.size, 1) // MODIFIED HERE
+		atomic.AddInt64(&s.size, 1)
 	}
 	b.m[key] = it
 	b.mu.Unlock()
@@ -125,49 +132,58 @@ func (s *Storage) Delete(key string) {
 	b.mu.Lock()
 	if _, ok := b.m[key]; ok {
 		delete(b.m, key)
-		atomic.AddInt64(&s.size, -1) // MODIFIED HERE
+		atomic.AddInt64(&s.size, -1)
 	}
 	b.mu.Unlock()
 }
 
 // Find retrieves the item.Item for a given key, if it exists.
-// Expiration checks are done externally.
+// Returns interface{} for backward compatibility.
 func (s *Storage) Find(key string) (interface{}, bool) {
-	b := s.bucket(key)
-	b.mu.RLock()
-	it, ok := b.m[key]
-	b.mu.RUnlock()
+	it, ok := s.FindItem(key)
 	if !ok {
 		return nil, false
 	}
 	return it, true
 }
 
+// FindItem retrieves the *item.Item for a given key without boxing.
+// This is the optimized path that avoids interface{} allocation.
+func (s *Storage) FindItem(key string) (*item.Item, bool) {
+	b := s.bucket(key)
+	b.mu.RLock()
+	it, ok := b.m[key]
+	b.mu.RUnlock()
+	return it, ok
+}
+
 // Len returns the current number of keys.
-func (s *Storage) Len() int { return int(atomic.LoadInt64(&s.size)) } // MODIFIED HERE
+func (s *Storage) Len() int {
+	return int(atomic.LoadInt64(&s.size))
+}
 
 // Truncate clears all entries in all shards.
 func (s *Storage) Truncate() {
 	for _, sh := range s.shards {
 		sh.mu.Lock()
 		if len(sh.m) > 0 {
-			atomic.AddInt64(&s.size, -int64(len(sh.m))) // MODIFIED HERE
+			atomic.AddInt64(&s.size, -int64(len(sh.m)))
 		}
-		sh.m = make(map[string]item.Item)
+		sh.m = make(map[string]*item.Item, defaultMapPrealloc)
 		sh.mu.Unlock()
 	}
 }
 
-// Flush removes expired keys from the provided list.
-func (s *Storage) Flush(keys []string) {
-	now := time.Now()
+// FlushKeys removes expired keys from the provided list.
+// Uses int64 Unix nano for expiration check.
+func (s *Storage) FlushKeys(keys []string, nowNano int64) {
 	for _, k := range keys {
 		b := s.bucket(k)
 		b.mu.Lock()
 		if it, ok := b.m[k]; ok {
-			if it.IsExpired(now) {
+			if it.IsExpired(nowNano) {
 				delete(b.m, k)
-				atomic.AddInt64(&s.size, -1) // MODIFIED HERE
+				atomic.AddInt64(&s.size, -1)
 			}
 		}
 		b.mu.Unlock()
@@ -175,14 +191,15 @@ func (s *Storage) Flush(keys []string) {
 }
 
 // RemoveIfExpired checks and deletes the key if it is expired.
-func (s *Storage) RemoveIfExpired(key string, now time.Time) bool {
+// Uses int64 Unix nano for expiration check.
+func (s *Storage) RemoveIfExpired(key string, nowNano int64) bool {
 	b := s.bucket(key)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if it, ok := b.m[key]; ok {
-		if it.IsExpired(now) {
+		if it.IsExpired(nowNano) {
 			delete(b.m, key)
-			atomic.AddInt64(&s.size, -1) // MODIFIED HERE
+			atomic.AddInt64(&s.size, -1)
 			return true
 		}
 	}
@@ -191,7 +208,7 @@ func (s *Storage) RemoveIfExpired(key string, now time.Time) bool {
 
 // GetAllKeys returns all keys across all shards.
 func (s *Storage) GetAllKeys() []string {
-	keys := make([]string, 0, s.Len()) // Len() is already modified
+	keys := make([]string, 0, s.Len())
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k := range sh.m {
@@ -206,11 +223,11 @@ func (s *Storage) GetAllKeys() []string {
 // This matches the original Close contract for compatibility.
 func (s *Storage) Close() map[string]interface{} {
 	allData := make(map[string]interface{})
-	now := time.Now()
+	nowNano := clock.NowNano()
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k, v := range sh.m {
-			if !v.IsExpired(now) {
+			if !v.IsExpired(nowNano) {
 				allData[k] = v
 			}
 		}

@@ -18,6 +18,15 @@ func prepareCache(count int) *mcache.CacheDriver {
 	return c
 }
 
+// prepareKeys pre-generates keys to avoid allocation in benchmarks.
+func prepareKeys(count int) []string {
+	keys := make([]string, count)
+	for i := 0; i < count; i++ {
+		keys[i] = strconv.Itoa(i)
+	}
+	return keys
+}
+
 func BenchmarkCacheOperations(b *testing.B) {
 	const existing = 100000
 
@@ -75,6 +84,77 @@ func BenchmarkCacheOperations(b *testing.B) {
 				k := strconv.Itoa(i)
 				c.Set(k, i, mcache.TTL_FOREVER)
 				c.Get(strconv.Itoa(i % existing))
+				i++
+			}
+		})
+		b.StopTimer()
+		b.Cleanup(func() {
+			c.Truncate()
+			c.Close()
+		})
+	})
+}
+
+// BenchmarkCacheOperationsPreallocated measures pure cache operations
+// without strconv overhead by pre-generating keys.
+func BenchmarkCacheOperationsPreallocated(b *testing.B) {
+	const existing = 100000
+	keys := prepareKeys(existing)
+
+	b.Run("Write", func(b *testing.B) {
+		c := mcache.New()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			c.Set(keys[i%existing], i, mcache.TTL_FOREVER)
+		}
+		b.StopTimer()
+		b.Cleanup(func() {
+			c.Truncate()
+			c.Close()
+		})
+	})
+
+	b.Run("Read", func(b *testing.B) {
+		c := prepareCache(existing)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			c.Get(keys[i%existing])
+		}
+		b.StopTimer()
+		b.Cleanup(func() {
+			c.Truncate()
+			c.Close()
+		})
+	})
+
+	b.Run("WriteRead", func(b *testing.B) {
+		c := mcache.New()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			k := keys[i%existing]
+			c.Set(k, i, mcache.TTL_FOREVER)
+			c.Get(k)
+		}
+		b.StopTimer()
+		b.Cleanup(func() {
+			c.Truncate()
+			c.Close()
+		})
+	})
+
+	b.Run("ParallelReadWrite", func(b *testing.B) {
+		c := prepareCache(existing)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			i := 0
+			for pb.Next() {
+				k := keys[i%existing]
+				c.Set(k, i, mcache.TTL_FOREVER)
+				c.Get(k)
 				i++
 			}
 		})

@@ -2,26 +2,20 @@
 // This structure may be exposed to cache consumers if needed.
 package item
 
-import "time"
-
 // Item represents a cache entry.
 type Item struct {
 	Key      string      // Cache key
-	Expire   time.Time   // Expiration timestamp (zero means no expiration)
+	ExpireAt int64       // Expiration timestamp in Unix nano (0 means no expiration)
 	Data     []byte      // Raw value bytes
 	DataLink interface{} // Optional associated object
 }
 
-// IsExpired returns true if the item has expired by the provided time.
-func (i *Item) IsExpired(now time.Time) bool {
-	if i.Expire.IsZero() {
-		return false
-	}
-	return i.Expire.Before(now)
+// IsExpired returns true if the item has expired by the provided time (Unix nano).
+func (i *Item) IsExpired(nowNano int64) bool {
+	return i.ExpireAt > 0 && nowNano > i.ExpireAt
 }
 
-// IsActuallyExpired checks expiration against the current system time.
-// Avoid in tight loops due to time.Now() cost.
-func (i *Item) IsActuallyExpired() bool {
-	return i.IsExpired(time.Now())
+// IsExpiredZero returns true if the item never expires.
+func (i *Item) IsExpiredZero() bool {
+	return i.ExpireAt == 0
 }
