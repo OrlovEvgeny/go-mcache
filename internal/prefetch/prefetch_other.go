@@ -15,6 +15,3 @@ func PrefetchT2(addr unsafe.Pointer) {}
 
 // PrefetchNTA is a no-op on non-amd64 platforms.
 func PrefetchNTA(addr unsafe.Pointer) {}
-
-// PrefetchW is a no-op on non-amd64 platforms.
-func PrefetchW(addr unsafe.Pointer) {}

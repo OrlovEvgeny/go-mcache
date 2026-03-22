@@ -33,9 +33,4 @@ TEXT ·PrefetchNTA(SB), NOSPLIT, $0-8
     PREFETCHNTA (AX)
     RET
 
-// func PrefetchW(addr unsafe.Pointer)
-// Prefetch for write (brings cache line into exclusive state)
-TEXT ·PrefetchW(SB), NOSPLIT, $0-8
-    MOVQ addr+0(FP), AX
-    PREFETCHW (AX)
-    RET
+

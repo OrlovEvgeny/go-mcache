@@ -28,9 +28,3 @@ func PrefetchT2(addr unsafe.Pointer)
 //
 //go:noescape
 func PrefetchNTA(addr unsafe.Pointer)
-
-// PrefetchW prefetches data for writing.
-// Brings cache line into exclusive state, useful before a write operation.
-//
-//go:noescape
-func PrefetchW(addr unsafe.Pointer)
