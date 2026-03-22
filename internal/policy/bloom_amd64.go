@@ -11,6 +11,21 @@ import (
 	"github.com/OrlovEvgeny/go-mcache/internal/alloc"
 )
 
+//go:noescape
+func bloomCheckBit(bits unsafe.Pointer, idx uint64) bool
+
+//go:noescape
+func bloomSetBit(bits unsafe.Pointer, idx uint64) bool
+
+//go:noescape
+func bloomContains8(bits unsafe.Pointer, indices *[8]uint64, numBits uint64) uint8
+
+//go:noescape
+func popcountAVX2(x uint64) int
+
+//go:noescape
+func doubleHash(keyHash uint64, i int) uint64
+
 // bloomFilterSIMD is a SIMD-optimized bloom filter.
 // Uses aligned memory and optimized hash position calculations.
 type bloomFilterSIMD struct {

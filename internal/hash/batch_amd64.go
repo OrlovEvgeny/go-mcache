@@ -6,6 +6,15 @@ import (
 	"unsafe"
 )
 
+//go:noescape
+func mix64Asm(x uint64) uint64
+
+//go:noescape
+func mix64x4Asm(x0, x1, x2, x3 uint64) (r0, r1, r2, r3 uint64)
+
+//go:noescape
+func shardIndex(hash, mask uint64) uint64
+
 // HashStringBatch computes hashes for multiple strings.
 // Uses optimized memory access patterns for better cache utilization.
 func HashStringBatch(keys []string, hashes []uint64) {

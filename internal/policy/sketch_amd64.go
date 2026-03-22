@@ -9,6 +9,15 @@ import (
 	"github.com/OrlovEvgeny/go-mcache/internal/alloc"
 )
 
+//go:noescape
+func cmEstimateMinAVX2(row0, row1, row2, row3 unsafe.Pointer, idx0, idx1, idx2, idx3 uint64) uint8
+
+//go:noescape
+func cmIncrementSaturatingAVX2(ptr unsafe.Pointer, idx uint64) uint8
+
+//go:noescape
+func hashMix64(x uint64) uint64
+
 // cmSketchSIMD is a SIMD-optimized Count-Min Sketch.
 // Uses 8-bit counters with memory aligned for AVX2 operations.
 type cmSketchSIMD struct {
