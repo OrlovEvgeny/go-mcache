@@ -6,17 +6,15 @@ import (
 
 // PolicyLockFree combines lock-free TinyLFU admission with SampledLFU eviction.
 // The Access() method is completely lock-free, which is critical for read-heavy workloads.
-type PolicyLockFree struct {
+// Generic over K for exact-key identity.
+type PolicyLockFree[K comparable] struct {
 	admit *TinyLFULockFree
-	evict *SampledLFU
-	mu    sync.Mutex // Only for Add/Del operations that modify evict
+	evict *SampledLFU[K]
+	mu    sync.Mutex // For Add/Del/Update operations that modify evict
 }
 
 // NewPolicyLockFree creates a new policy with lock-free admission tracking.
-// numCounters is used for TinyLFU (recommended: 10x maxEntries).
-// maxCost is the maximum total cost (0 for unlimited).
-// maxEntries is the maximum number of entries (0 for unlimited).
-func NewPolicyLockFree(numCounters int64, maxCost int64, maxEntries int64) *PolicyLockFree {
+func NewPolicyLockFree[K comparable](numCounters int64, maxCost int64, maxEntries int64) *PolicyLockFree[K] {
 	if numCounters <= 0 && maxEntries > 0 {
 		numCounters = maxEntries * 10
 	}
@@ -24,16 +22,14 @@ func NewPolicyLockFree(numCounters int64, maxCost int64, maxEntries int64) *Poli
 		numCounters = 1 << 20 // Default ~1M
 	}
 
-	return &PolicyLockFree{
+	return &PolicyLockFree[K]{
 		admit: NewTinyLFULockFree(numCounters),
-		evict: NewSampledLFU(maxCost, maxEntries),
+		evict: NewSampledLFU[K](maxCost, maxEntries),
 	}
 }
 
 // Add attempts to add a key with the given cost.
-// Returns (victims to evict, whether the item should be added).
-// This still requires locking due to eviction policy updates.
-func (p *PolicyLockFree) Add(keyHash uint64, cost int64) (victims []uint64, added bool) {
+func (p *PolicyLockFree[K]) Add(key K, keyHash uint64, cost int64) (victims []Victim[K], added bool) {
 	// Record access (lock-free)
 	p.admit.Increment(keyHash)
 
@@ -41,8 +37,8 @@ func (p *PolicyLockFree) Add(keyHash uint64, cost int64) (victims []uint64, adde
 	defer p.mu.Unlock()
 
 	// Check if already tracked (update case)
-	if p.evict.Has(keyHash) {
-		p.evict.Update(keyHash, cost)
+	if p.evict.Has(key) {
+		p.evict.Update(key, keyHash, cost)
 		return nil, true
 	}
 
@@ -50,15 +46,15 @@ func (p *PolicyLockFree) Add(keyHash uint64, cost int64) (victims []uint64, adde
 	victims = p.findVictimsLocked(keyHash, cost)
 
 	// Add to eviction policy
-	p.evict.Add(keyHash, cost)
+	p.evict.Add(key, keyHash, cost)
 
 	return victims, true
 }
 
 // findVictimsLocked finds victims to evict to make room for a new item.
 // Must be called with p.mu held.
-func (p *PolicyLockFree) findVictimsLocked(incomingHash uint64, cost int64) []uint64 {
-	var victims []uint64
+func (p *PolicyLockFree[K]) findVictimsLocked(incomingHash uint64, cost int64) []Victim[K] {
+	victims := make([]Victim[K], 0, 8)
 
 	for p.evict.NeedsEviction() {
 		sample := p.evict.Sample()
@@ -66,21 +62,21 @@ func (p *PolicyLockFree) findVictimsLocked(incomingHash uint64, cost int64) []ui
 			break
 		}
 
-		var victim uint64
+		var victim Victim[K]
 		lowestFreq := int64(1<<63 - 1)
-		for _, keyHash := range sample {
-			freq := p.admit.Estimate(keyHash)
+		for _, v := range sample {
+			freq := p.admit.Estimate(v.KeyHash)
 			if freq < lowestFreq {
 				lowestFreq = freq
-				victim = keyHash
+				victim = v
 			}
 		}
 
-		if !p.admit.Admit(incomingHash, victim) {
+		if !p.admit.Admit(incomingHash, victim.KeyHash) {
 			break
 		}
 
-		p.evict.Del(victim)
+		p.evict.Del(victim.Key)
 		victims = append(victims, victim)
 	}
 
@@ -89,71 +85,75 @@ func (p *PolicyLockFree) findVictimsLocked(incomingHash uint64, cost int64) []ui
 
 // Access records an access to a key (hit).
 // This is completely LOCK-FREE and can be called concurrently.
-func (p *PolicyLockFree) Access(keyHash uint64) {
+func (p *PolicyLockFree[K]) Access(keyHash uint64) {
 	p.admit.Increment(keyHash)
 }
 
 // AccessBatch records accesses for multiple keys.
-// More efficient than individual Access calls.
-func (p *PolicyLockFree) AccessBatch(keyHashes []uint64) {
+func (p *PolicyLockFree[K]) AccessBatch(keyHashes []uint64) {
 	p.admit.IncrementBatch(keyHashes)
 }
 
 // Has checks if a key is tracked by the policy.
-func (p *PolicyLockFree) Has(keyHash uint64) bool {
-	return p.evict.Has(keyHash)
+func (p *PolicyLockFree[K]) Has(key K) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.evict.Has(key)
 }
 
 // Del removes a key from the policy.
-func (p *PolicyLockFree) Del(keyHash uint64) {
-	p.evict.Del(keyHash)
+func (p *PolicyLockFree[K]) Del(key K, keyHash uint64) {
+	p.mu.Lock()
+	p.evict.Del(key)
+	p.mu.Unlock()
 }
 
 // Update updates the cost of an existing key.
-func (p *PolicyLockFree) Update(keyHash uint64, cost int64) {
-	p.evict.Update(keyHash, cost)
+func (p *PolicyLockFree[K]) Update(key K, keyHash uint64, cost int64) {
+	p.mu.Lock()
+	p.evict.Update(key, keyHash, cost)
+	p.mu.Unlock()
 }
 
 // Cost returns the current total cost.
-func (p *PolicyLockFree) Cost() int64 {
+func (p *PolicyLockFree[K]) Cost() int64 {
 	return p.evict.UsedCost()
 }
 
 // NumEntries returns the current number of entries.
-func (p *PolicyLockFree) NumEntries() int64 {
+func (p *PolicyLockFree[K]) NumEntries() int64 {
 	return p.evict.NumEntries()
 }
 
 // Clear resets the policy to its initial state.
-func (p *PolicyLockFree) Clear() {
+func (p *PolicyLockFree[K]) Clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	p.admit.Clear()
 	p.evict.Clear()
 }
 
 // SetMaxCost updates the maximum cost limit.
-func (p *PolicyLockFree) SetMaxCost(maxCost int64) {
+func (p *PolicyLockFree[K]) SetMaxCost(maxCost int64) {
 	p.evict.SetMaxCost(maxCost)
 }
 
 // SetMaxEntries updates the maximum entries limit.
-func (p *PolicyLockFree) SetMaxEntries(maxEntries int64) {
+func (p *PolicyLockFree[K]) SetMaxEntries(maxEntries int64) {
 	p.evict.SetMaxEntries(maxEntries)
 }
 
 // FillRatio returns the doorkeeper bloom filter fill ratio.
-func (p *PolicyLockFree) FillRatio() float64 {
+func (p *PolicyLockFree[K]) FillRatio() float64 {
 	return p.admit.FillRatio()
 }
 
 // NumIncrements returns the number of access increments.
-func (p *PolicyLockFree) NumIncrements() int64 {
+func (p *PolicyLockFree[K]) NumIncrements() int64 {
 	return p.admit.NumIncrements()
 }
 
 // Estimate returns the estimated frequency for a key.
-func (p *PolicyLockFree) Estimate(keyHash uint64) int64 {
+func (p *PolicyLockFree[K]) Estimate(keyHash uint64) int64 {
 	return p.admit.Estimate(keyHash)
 }

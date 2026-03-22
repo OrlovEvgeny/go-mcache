@@ -2,6 +2,7 @@
 package buffer
 
 import (
+	"runtime"
 	"sync/atomic"
 	"time"
 )
@@ -127,6 +128,7 @@ type WriteBuffer[T any] struct {
 	flushCh   chan struct{}
 	stopCh    chan struct{}
 	doneCh    chan struct{}
+	syncCh    chan chan struct{} // For synchronous flush requests
 }
 
 // NewWriteBuffer creates a new write buffer with automatic flushing.
@@ -141,6 +143,7 @@ func NewWriteBuffer[T any](capacity int, batchSize int, flushInterval time.Durat
 		flushCh:   make(chan struct{}, 1),
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
+		syncCh:    make(chan chan struct{}, 8),
 	}
 
 	go wb.flushLoop(flushInterval)
@@ -156,8 +159,9 @@ func (wb *WriteBuffer[T]) Push(item T) bool {
 		case wb.flushCh <- struct{}{}:
 		default:
 		}
-		// Spin wait briefly for space
+		// Yield and retry a few times before giving up
 		for i := 0; i < 100; i++ {
+			runtime.Gosched()
 			if wb.ring.Push(item) {
 				return true
 			}
@@ -194,6 +198,10 @@ func (wb *WriteBuffer[T]) flushLoop(interval time.Duration) {
 			wb.flushBatch(&batch)
 		case <-wb.flushCh:
 			wb.flushBatch(&batch)
+		case done := <-wb.syncCh:
+			// Synchronous flush: drain buffer then signal completion
+			wb.flushBatch(&batch)
+			close(done)
 		}
 	}
 }
@@ -218,11 +226,22 @@ func (wb *WriteBuffer[T]) flushBatch(batch *[]T) {
 	}
 }
 
-// Flush triggers an immediate flush of the buffer.
+// Flush triggers an immediate flush of the buffer (non-blocking).
 func (wb *WriteBuffer[T]) Flush() {
 	select {
 	case wb.flushCh <- struct{}{}:
 	default:
+	}
+}
+
+// FlushSync triggers an immediate flush and blocks until it completes.
+func (wb *WriteBuffer[T]) FlushSync() {
+	done := make(chan struct{})
+	select {
+	case wb.syncCh <- done:
+		<-done
+	case <-wb.doneCh:
+		// Buffer already closed
 	}
 }
 

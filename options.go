@@ -29,11 +29,14 @@ type config[K comparable, V any] struct {
 	// GC settings
 	DefaultTTL time.Duration // Default TTL for entries without explicit TTL
 
-	// Storage type
-	UseGCFreeStorage bool // Use GC-free storage (requires []byte values)
-
 	// Advanced
 	IgnoreInternalCost bool // Ignore internal metadata cost in cost calculations
+
+	// Policy selection
+	UseLockFreePolicy bool // Use lock-free policy for reduced contention (default: true)
+
+	// Prefix search (opt-in for string keys)
+	EnablePrefixSearch bool // Enable radix tree for prefix search (default: false)
 }
 
 // Option is a function that configures a Cache.
@@ -42,11 +45,12 @@ type Option[K comparable, V any] func(*config[K, V])
 // defaultConfig returns the default configuration.
 func defaultConfig[K comparable, V any]() *config[K, V] {
 	return &config[K, V]{
-		MaxEntries:  0,    // unlimited
-		MaxCost:     0,    // unlimited
-		NumCounters: 0,    // will be set based on MaxEntries
-		ShardCount:  1024, // 1024 shards
-		BufferItems: 0,    // No buffering by default (synchronous writes)
+		MaxEntries:        0,    // unlimited
+		MaxCost:           0,    // unlimited
+		NumCounters:       0,    // will be set based on MaxEntries
+		ShardCount:        1024, // 1024 shards
+		BufferItems:       0,    // No buffering by default (synchronous writes)
+		UseLockFreePolicy: true, // Use lock-free policy by default for better read performance
 	}
 }
 
@@ -154,27 +158,31 @@ func WithDefaultTTL[K comparable, V any](ttl time.Duration) Option[K, V] {
 	}
 }
 
-// WithGCFreeStorage enables GC-free storage mode.
-// This mode stores values as serialized bytes, reducing GC pressure.
-// Best suited for caches with []byte values.
-func WithGCFreeStorage[K comparable, V any]() Option[K, V] {
-	return func(c *config[K, V]) {
-		c.UseGCFreeStorage = true
-	}
-}
-
-// WithStandardStorage uses the standard storage mode (default).
-// This mode supports any value type but values are tracked by GC.
-func WithStandardStorage[K comparable, V any]() Option[K, V] {
-	return func(c *config[K, V]) {
-		c.UseGCFreeStorage = false
-	}
-}
-
 // WithIgnoreInternalCost configures whether internal metadata cost
 // should be ignored when calculating total cache cost.
 func WithIgnoreInternalCost[K comparable, V any](ignore bool) Option[K, V] {
 	return func(c *config[K, V]) {
 		c.IgnoreInternalCost = ignore
+	}
+}
+
+// WithLockFreePolicy configures whether to use the lock-free policy.
+// When enabled (default), the Access() method is completely lock-free,
+// which significantly reduces contention on read-heavy workloads.
+// When disabled, the standard mutex-based policy is used.
+func WithLockFreePolicy[K comparable, V any](enabled bool) Option[K, V] {
+	return func(c *config[K, V]) {
+		c.UseLockFreePolicy = enabled
+	}
+}
+
+// WithPrefixSearch enables prefix search functionality for string keys.
+// When enabled, a radix tree is maintained for efficient prefix lookups.
+// This adds memory overhead and slight write latency, so only enable
+// if you need ScanPrefix functionality.
+// Default: false (disabled).
+func WithPrefixSearch[K comparable, V any](enabled bool) Option[K, V] {
+	return func(c *config[K, V]) {
+		c.EnablePrefixSearch = enabled
 	}
 }

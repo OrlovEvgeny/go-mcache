@@ -10,11 +10,19 @@ const (
 	defaultSampleSize = 5
 )
 
+// trackedItem stores the hash and cost for a tracked key.
+type trackedItem struct {
+	keyHash uint64
+	cost    int64
+}
+
 // SampledLFU implements sampled LFU eviction policy.
-// Instead of maintaining a sorted list, it samples random items
-// and evicts the one with lowest frequency.
-type SampledLFU struct {
-	keyCosts   map[uint64]int64 // keyHash -> cost
+// Generic over K for exact-key identity (no hash collision ambiguity).
+// Uses a dense array for O(sampleSize) random sampling.
+type SampledLFU[K comparable] struct {
+	costs    map[K]trackedItem // key -> {hash, cost}
+	keys     []K               // dense array for O(1) random access
+	keyIndex map[K]int          // key -> index in keys[]
 	maxCost    int64
 	usedCost   int64
 	maxEntries int64
@@ -25,9 +33,11 @@ type SampledLFU struct {
 }
 
 // NewSampledLFU creates a new SampledLFU eviction policy.
-func NewSampledLFU(maxCost int64, maxEntries int64) *SampledLFU {
-	return &SampledLFU{
-		keyCosts:   make(map[uint64]int64),
+func NewSampledLFU[K comparable](maxCost int64, maxEntries int64) *SampledLFU[K] {
+	return &SampledLFU[K]{
+		costs:      make(map[K]trackedItem),
+		keys:       make([]K, 0, 64),
+		keyIndex:   make(map[K]int),
 		maxCost:    maxCost,
 		maxEntries: maxEntries,
 		sampleSize: defaultSampleSize,
@@ -36,72 +46,89 @@ func NewSampledLFU(maxCost int64, maxEntries int64) *SampledLFU {
 }
 
 // Add records a key with its cost.
-// Returns true if added, false if rejected due to capacity.
-func (s *SampledLFU) Add(keyHash uint64, cost int64) bool {
+func (s *SampledLFU[K]) Add(key K, keyHash uint64, cost int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if key already exists
-	if existingCost, exists := s.keyCosts[keyHash]; exists {
+	if existing, exists := s.costs[key]; exists {
 		// Update cost
-		s.usedCost += cost - existingCost
-		s.keyCosts[keyHash] = cost
-		return true
+		s.usedCost += cost - existing.cost
+		s.costs[key] = trackedItem{keyHash: keyHash, cost: cost}
+		return
 	}
 
-	s.keyCosts[keyHash] = cost
+	s.costs[key] = trackedItem{keyHash: keyHash, cost: cost}
+	// Add to dense array
+	s.keyIndex[key] = len(s.keys)
+	s.keys = append(s.keys, key)
 	s.usedCost += cost
 	s.numEntries++
-	return true
 }
 
 // Has checks if a key is tracked by the policy.
-func (s *SampledLFU) Has(keyHash uint64) bool {
+func (s *SampledLFU[K]) Has(key K) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, exists := s.keyCosts[keyHash]
+	_, exists := s.costs[key]
 	return exists
 }
 
 // Del removes a key from the policy.
-func (s *SampledLFU) Del(keyHash uint64) {
+func (s *SampledLFU[K]) Del(key K) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if cost, exists := s.keyCosts[keyHash]; exists {
-		s.usedCost -= cost
-		s.numEntries--
-		delete(s.keyCosts, keyHash)
+	item, exists := s.costs[key]
+	if !exists {
+		return
+	}
+
+	s.usedCost -= item.cost
+	s.numEntries--
+	delete(s.costs, key)
+
+	// Swap-delete from dense array
+	idx, ok := s.keyIndex[key]
+	if ok {
+		last := len(s.keys) - 1
+		if idx != last {
+			s.keys[idx] = s.keys[last]
+			s.keyIndex[s.keys[idx]] = idx
+		}
+		var zero K
+		s.keys[last] = zero
+		s.keys = s.keys[:last]
+		delete(s.keyIndex, key)
 	}
 }
 
 // Update updates the cost of an existing key.
-func (s *SampledLFU) Update(keyHash uint64, cost int64) {
+func (s *SampledLFU[K]) Update(key K, keyHash uint64, cost int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existingCost, exists := s.keyCosts[keyHash]; exists {
-		s.usedCost += cost - existingCost
-		s.keyCosts[keyHash] = cost
+	if existing, exists := s.costs[key]; exists {
+		s.usedCost += cost - existing.cost
+		s.costs[key] = trackedItem{keyHash: keyHash, cost: cost}
 	}
 }
 
 // UsedCost returns the total cost of all tracked items.
-func (s *SampledLFU) UsedCost() int64 {
+func (s *SampledLFU[K]) UsedCost() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.usedCost
 }
 
 // NumEntries returns the number of tracked entries.
-func (s *SampledLFU) NumEntries() int64 {
+func (s *SampledLFU[K]) NumEntries() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.numEntries
 }
 
 // NeedsEviction returns true if eviction is needed based on limits.
-func (s *SampledLFU) NeedsEviction() bool {
+func (s *SampledLFU[K]) NeedsEviction() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -114,64 +141,92 @@ func (s *SampledLFU) NeedsEviction() bool {
 	return false
 }
 
-// Sample returns a random sample of tracked key hashes.
-func (s *SampledLFU) Sample() []uint64 {
+// Sample returns a random sample of tracked keys.
+// O(sampleSize) time complexity via dense array random indexing.
+func (s *SampledLFU[K]) Sample() []Victim[K] {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.keyCosts) == 0 {
+	n := s.adaptiveSampleSize()
+	if n > len(s.keys) {
+		n = len(s.keys)
+	}
+	if n == 0 {
 		return nil
 	}
 
-	n := s.sampleSize
-	if n > len(s.keyCosts) {
-		n = len(s.keyCosts)
-	}
-
-	// Reservoir sampling for efficiency when map is large
-	sample := make([]uint64, 0, n)
-	i := 0
-	for keyHash := range s.keyCosts {
-		if i < n {
-			sample = append(sample, keyHash)
-		} else {
-			j := s.rng.Intn(i + 1)
-			if j < n {
-				sample[j] = keyHash
-			}
+	// If cache is small, return all entries
+	if len(s.keys) <= n {
+		sample := make([]Victim[K], len(s.keys))
+		for i, key := range s.keys {
+			item := s.costs[key]
+			sample[i] = Victim[K]{Key: key, KeyHash: item.keyHash}
 		}
-		i++
+		return sample
 	}
 
+	// Random selection from dense array — O(sampleSize)
+	sample := make([]Victim[K], 0, n)
+	seen := make(map[int]struct{}, n)
+	for len(sample) < n {
+		idx := s.rng.Intn(len(s.keys))
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		key := s.keys[idx]
+		item := s.costs[key]
+		sample = append(sample, Victim[K]{Key: key, KeyHash: item.keyHash})
+	}
 	return sample
 }
 
+// adaptiveSampleSize returns an appropriate sample size based on the number of entries.
+func (s *SampledLFU[K]) adaptiveSampleSize() int {
+	n := len(s.keys)
+	switch {
+	case n < 100:
+		return n // Sample all for small caches
+	case n < 1000:
+		return 10
+	case n < 10000:
+		return 15
+	default:
+		return 20
+	}
+}
+
 // Cost returns the cost of a specific key, or 0 if not found.
-func (s *SampledLFU) Cost(keyHash uint64) int64 {
+func (s *SampledLFU[K]) Cost(key K) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.keyCosts[keyHash]
+	if item, ok := s.costs[key]; ok {
+		return item.cost
+	}
+	return 0
 }
 
 // Clear removes all tracked keys.
-func (s *SampledLFU) Clear() {
+func (s *SampledLFU[K]) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.keyCosts = make(map[uint64]int64)
+	s.costs = make(map[K]trackedItem)
+	s.keys = s.keys[:0]
+	s.keyIndex = make(map[K]int)
 	s.usedCost = 0
 	s.numEntries = 0
 }
 
 // SetMaxCost updates the maximum cost limit.
-func (s *SampledLFU) SetMaxCost(maxCost int64) {
+func (s *SampledLFU[K]) SetMaxCost(maxCost int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxCost = maxCost
 }
 
 // SetMaxEntries updates the maximum entries limit.
-func (s *SampledLFU) SetMaxEntries(maxEntries int64) {
+func (s *SampledLFU[K]) SetMaxEntries(maxEntries int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxEntries = maxEntries

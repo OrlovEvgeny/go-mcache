@@ -118,12 +118,12 @@ func TestTinyLFU(t *testing.T) {
 }
 
 func TestSampledLFU(t *testing.T) {
-	s := NewSampledLFU(100, 10)
+	s := NewSampledLFU[uint64](100, 10)
 
 	// Add entries
-	s.Add(1, 10)
-	s.Add(2, 20)
-	s.Add(3, 30)
+	s.Add(1, 1, 10)
+	s.Add(2, 2, 20)
+	s.Add(3, 3, 30)
 
 	if s.NumEntries() != 3 {
 		t.Errorf("Expected 3 entries, got %d", s.NumEntries())
@@ -138,7 +138,7 @@ func TestSampledLFU(t *testing.T) {
 	}
 
 	// Test Update
-	s.Update(1, 15)
+	s.Update(1, 1, 15)
 	if s.UsedCost() != 65 {
 		t.Errorf("Expected cost 65 after update, got %d", s.UsedCost())
 	}
@@ -163,26 +163,26 @@ func TestSampledLFU(t *testing.T) {
 }
 
 func TestPolicy(t *testing.T) {
-	p := NewPolicy(1000, 100, 0) // 100 max cost, unlimited entries
+	p := NewPolicy[uint64](1000, 100, 0) // 100 max cost, unlimited entries
 
 	// Add entries
-	_, added := p.Add(1, 30)
+	_, added := p.Add(1, 1, 30)
 	if !added {
 		t.Error("First entry should be added")
 	}
 
-	_, added = p.Add(2, 30)
+	_, added = p.Add(2, 2, 30)
 	if !added {
 		t.Error("Second entry should be added")
 	}
 
-	_, added = p.Add(3, 30)
+	_, added = p.Add(3, 3, 30)
 	if !added {
 		t.Error("Third entry should be added")
 	}
 
 	// Total cost now 90, adding 30 more should trigger eviction
-	victims, added := p.Add(4, 30)
+	victims, added := p.Add(4, 4, 30)
 	t.Logf("Victims after adding entry 4: %v, added: %v", victims, added)
 
 	// Test Has
@@ -199,7 +199,7 @@ func TestPolicy(t *testing.T) {
 }
 
 func TestPolicyEviction(t *testing.T) {
-	p := NewPolicy(1000, 0, 5) // Max 5 entries
+	p := NewPolicy[uint64](1000, 0, 5) // Max 5 entries
 
 	// Add 10 entries with different frequencies
 	for i := 0; i < 10; i++ {
@@ -208,7 +208,7 @@ func TestPolicyEviction(t *testing.T) {
 		for j := 0; j < i+1; j++ {
 			p.Access(keyHash)
 		}
-		p.Add(keyHash, 1)
+		p.Add(keyHash, keyHash, 1)
 	}
 
 	entries := p.NumEntries()
@@ -267,11 +267,12 @@ func BenchmarkTinyLFUIncrement(b *testing.B) {
 }
 
 func BenchmarkPolicyAdd(b *testing.B) {
-	p := NewPolicy(1<<20, 1<<30, 0)
+	p := NewPolicy[uint64](1<<20, 1<<30, 0)
 	rng := rand.New(rand.NewSource(42))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		p.Add(rng.Uint64(), 1)
+		k := rng.Uint64()
+		p.Add(k, k, 1)
 	}
 }

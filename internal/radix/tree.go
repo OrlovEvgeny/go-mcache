@@ -34,16 +34,19 @@ func (t *Tree) Insert(key string, hash uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.insertNode(t.root, key, hash)
-	t.size++
+	if t.insertNode(t.root, key, hash) {
+		t.size++
+	}
 }
 
 // insertNode recursively inserts a key into the tree.
-func (t *Tree) insertNode(n *node, key string, hash uint64) {
+// Returns true if a new leaf was created (key didn't exist before).
+func (t *Tree) insertNode(n *node, key string, hash uint64) bool {
 	if len(key) == 0 {
+		isNew := !n.isLeaf
 		n.isLeaf = true
 		n.keyHash = hash
-		return
+		return isNew
 	}
 
 	c := key[0]
@@ -57,7 +60,7 @@ func (t *Tree) insertNode(n *node, key string, hash uint64) {
 			isLeaf:   true,
 			keyHash:  hash,
 		}
-		return
+		return true
 	}
 
 	// Find common prefix length
@@ -65,8 +68,7 @@ func (t *Tree) insertNode(n *node, key string, hash uint64) {
 
 	if commonLen == len(child.prefix) {
 		// Key starts with child's prefix, recurse
-		t.insertNode(child, key[commonLen:], hash)
-		return
+		return t.insertNode(child, key[commonLen:], hash)
 	}
 
 	// Split the child node
@@ -95,6 +97,7 @@ func (t *Tree) insertNode(n *node, key string, hash uint64) {
 	}
 
 	n.children[c] = newChild
+	return true
 }
 
 // Delete removes a key from the tree.

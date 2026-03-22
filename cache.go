@@ -2,9 +2,11 @@ package mcache
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/buffer"
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
@@ -26,16 +28,18 @@ type Item[K comparable, V any] struct {
 // Cache is a generic, high-performance in-memory cache.
 type Cache[K comparable, V any] struct {
 	store       *store.ShardedStore[K, V]
-	policy      *policy.Policy
-	radixTree   *radix.Tree // Only for string keys
+	policy      policy.Policer[K]
+	expiryHeap  *store.ExpiryHeap // Min-heap for efficient expiration tracking
+	radixTree   *radix.Tree       // Only for string keys
 	metrics     *Metrics
 	config      *config[K, V]
 	writeBuffer *buffer.WriteBuffer[writeItem[K, V]]
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	closed   atomic.Bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	closed atomic.Bool
+	clearMu sync.Mutex // Serializes Clear() with removeExpired()
 
 	// For string key prefix/pattern operations
 	isStringKey bool
@@ -43,8 +47,8 @@ type Cache[K comparable, V any] struct {
 
 // writeItem represents a pending write operation.
 type writeItem[K comparable, V any] struct {
-	entry   *store.Entry[K, V]
-	isSet   bool // true = set, false = delete
+	entry *store.Entry[K, V]
+	isSet bool // true = set, false = delete
 }
 
 // NewCache creates a new generic Cache with the given options.
@@ -65,20 +69,32 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create policy based on configuration
+	var pol policy.Policer[K]
+	if cfg.UseLockFreePolicy {
+		pol = policy.NewPolicyLockFree[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
+	} else {
+		pol = policy.NewPolicy[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
+	}
+
 	c := &Cache[K, V]{
-		store:   store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
-		policy:  policy.NewPolicy(cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries),
-		metrics: newMetrics(),
-		config:  cfg,
-		ctx:     ctx,
-		cancel:  cancel,
+		store:      store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
+		policy:     pol,
+		expiryHeap: store.NewExpiryHeap(1024), // Initial capacity for expiration tracking
+		metrics:    newMetrics(),
+		config:     cfg,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	// Check if K is string for prefix search support
 	var zeroK K
 	if _, ok := any(zeroK).(string); ok {
 		c.isStringKey = true
-		c.radixTree = radix.New()
+		// Only create radix tree if prefix search is explicitly enabled
+		if cfg.EnablePrefixSearch {
+			c.radixTree = radix.New()
+		}
 	}
 
 	// Setup write buffer if buffering is enabled
@@ -143,8 +159,8 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 		}
 	}
 
-	// Apply default TTL if none specified
-	if ttl == 0 && c.config.DefaultTTL > 0 {
+	// Apply default TTL if none specified or negative
+	if ttl <= 0 && c.config.DefaultTTL > 0 {
 		ttl = c.config.DefaultTTL
 	}
 
@@ -164,8 +180,12 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 	}
 
 	if c.writeBuffer != nil {
-		// Buffered write
-		return c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true})
+		// Buffered write with synchronous fallback on buffer saturation
+		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true}) {
+			c.metrics.incBufferDrop()
+			return c.doSet(entry)
+		}
+		return true
 	}
 
 	return c.doSet(entry)
@@ -174,7 +194,7 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 // doSet performs the actual set operation.
 func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
 	// Check admission policy and get victims to evict
-	victims, added := c.policy.Add(entry.KeyHash, entry.Cost)
+	victims, added := c.policy.Add(entry.Key, entry.KeyHash, entry.Cost)
 	if !added {
 		c.metrics.incRejection()
 		if c.config.OnReject != nil {
@@ -183,13 +203,18 @@ func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
 		return false
 	}
 
-	// Evict victims
-	for _, victimHash := range victims {
-		c.evictByHash(victimHash)
+	// Evict victims by exact key (no hash-based reverse lookup needed)
+	for _, victim := range victims {
+		c.evictVictim(victim)
 	}
 
 	// Store the entry
 	prev := c.store.Set(entry)
+
+	// Add to expiry heap if entry has expiration
+	if entry.ExpireAt > 0 {
+		c.expiryHeap.Push(entry.KeyHash, entry.ExpireAt)
+	}
 
 	// Update radix tree for string keys
 	if c.isStringKey && c.radixTree != nil {
@@ -209,31 +234,21 @@ func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
 	return true
 }
 
-// evictByHash evicts an entry by its key hash.
-func (c *Cache[K, V]) evictByHash(keyHash uint64) {
-	// Find the entry in the store
-	var foundEntry *store.Entry[K, V]
-	c.store.Range(func(entry *store.Entry[K, V]) bool {
-		if entry.KeyHash == keyHash {
-			foundEntry = entry
-			return false // Stop iteration
-		}
-		return true
-	})
-
-	if foundEntry == nil {
-		return
-	}
-
-	// Delete from store
-	deleted := c.store.DeleteByHash(foundEntry.Key, keyHash)
+// evictVictim evicts an entry selected by the admission policy.
+// Uses exact key from the victim — no hash-based reverse lookup needed.
+func (c *Cache[K, V]) evictVictim(victim policy.Victim[K]) {
+	// Delete from store by exact key
+	deleted := c.store.DeleteByHash(victim.Key, victim.KeyHash)
 	if deleted == nil {
 		return
 	}
 
+	// Remove from expiry heap
+	c.expiryHeap.Remove(victim.KeyHash)
+
 	// Remove from radix tree
 	if c.isStringKey && c.radixTree != nil {
-		if strKey, ok := any(foundEntry.Key).(string); ok {
+		if strKey, ok := any(victim.Key).(string); ok {
 			c.radixTree.Delete(strKey)
 		}
 	}
@@ -256,10 +271,14 @@ func (c *Cache[K, V]) Delete(key K) bool {
 	keyHash := c.store.KeyHash(key)
 
 	if c.writeBuffer != nil {
-		// Buffered delete
+		// Buffered delete with synchronous fallback on buffer saturation
 		var zero V
 		entry := &store.Entry[K, V]{Key: key, KeyHash: keyHash, Value: zero}
-		return c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: false})
+		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: false}) {
+			c.metrics.incBufferDrop()
+			return c.doDelete(key, keyHash)
+		}
+		return true
 	}
 
 	return c.doDelete(key, keyHash)
@@ -273,7 +292,10 @@ func (c *Cache[K, V]) doDelete(key K, keyHash uint64) bool {
 	}
 
 	// Remove from policy
-	c.policy.Del(keyHash)
+	c.policy.Del(key, keyHash)
+
+	// Remove from expiry heap
+	c.expiryHeap.Remove(keyHash)
 
 	// Remove from radix tree
 	if c.isStringKey && c.radixTree != nil {
@@ -308,10 +330,10 @@ func (c *Cache[K, V]) GetMany(keys []K) map[K]V {
 
 // BatchResult holds the result of a batch get operation.
 type BatchResult[K comparable, V any] struct {
-	Keys    []K
-	Values  []V
-	Found   []bool
-	Hashes  []uint64
+	Keys   []K
+	Values []V
+	Found  []bool
+	Hashes []uint64
 }
 
 // GetBatch retrieves multiple values from the cache with optimized prefetching.
@@ -443,9 +465,7 @@ func (c *Cache[K, V]) DeleteMany(keys []K) int {
 // Wait waits for all pending write operations to complete.
 func (c *Cache[K, V]) Wait() {
 	if c.writeBuffer != nil {
-		c.writeBuffer.Flush()
-		// Give a small amount of time for the flush to complete
-		time.Sleep(time.Millisecond)
+		c.writeBuffer.FlushSync()
 	}
 }
 
@@ -494,8 +514,11 @@ func (c *Cache[K, V]) Len() int {
 // Clear removes all entries from the cache.
 func (c *Cache[K, V]) Clear() {
 	c.Wait()
+	c.clearMu.Lock()
+	defer c.clearMu.Unlock()
 	c.store.Clear()
 	c.policy.Clear()
+	c.expiryHeap.Clear()
 	if c.radixTree != nil {
 		c.radixTree.Clear()
 	}
@@ -545,32 +568,33 @@ func (c *Cache[K, V]) expirationWorker() {
 	}
 }
 
-// removeExpired removes all expired entries.
+// removeExpired removes all expired entries using shard-local sweep.
+// Collects expired entries atomically per shard, then updates policy/heap/radix outside shard locks.
 func (c *Cache[K, V]) removeExpired() {
+	c.clearMu.Lock()
+	defer c.clearMu.Unlock()
+
 	now := clock.NowNano()
 
-	c.store.Range(func(entry *store.Entry[K, V]) bool {
-		if entry.ExpireAt > 0 && now > entry.ExpireAt {
-			// Delete expired entry
-			deleted := c.store.DeleteByHash(entry.Key, entry.KeyHash)
-			if deleted != nil {
-				c.policy.Del(entry.KeyHash)
+	// Shard-local sweep: single lock per shard, not per entry
+	expired := c.store.CollectExpired(now)
 
-				if c.isStringKey && c.radixTree != nil {
-					if strKey, ok := any(entry.Key).(string); ok {
-						c.radixTree.Delete(strKey)
-					}
-				}
+	for _, entry := range expired {
+		c.policy.Del(entry.Key, entry.KeyHash)
+		c.expiryHeap.Remove(entry.KeyHash)
 
-				c.metrics.incExpiration()
-
-				if c.config.OnExpire != nil {
-					c.config.OnExpire(entry.Key, entry.Value)
-				}
+		if c.isStringKey && c.radixTree != nil {
+			if strKey, ok := any(entry.Key).(string); ok {
+				c.radixTree.Delete(strKey)
 			}
 		}
-		return true
-	})
+
+		c.metrics.incExpiration()
+
+		if c.config.OnExpire != nil {
+			c.config.OnExpire(entry.Key, entry.Value)
+		}
+	}
 }
 
 // defaultKeyHasher returns the default hasher for a key type.
@@ -580,15 +604,38 @@ func defaultKeyHasher[K comparable](key K) uint64 {
 		return hash.String(k)
 	case int:
 		return hash.Int(k)
-	case int64:
-		return hash.Int64(k)
-	case uint64:
-		return hash.Uint64(k)
+	case int8:
+		return hash.Int(int(k))
+	case int16:
+		return hash.Int(int(k))
 	case int32:
 		return hash.Int32(k)
+	case int64:
+		return hash.Int64(k)
+	case uint:
+		return hash.Uint64(uint64(k))
+	case uint8:
+		return hash.Uint64(uint64(k))
+	case uint16:
+		return hash.Uint64(uint64(k))
 	case uint32:
 		return hash.Uint32(k)
+	case uint64:
+		return hash.Uint64(k)
+	case float32:
+		return hash.Uint32(*(*uint32)(unsafe.Pointer(&k)))
+	case float64:
+		return hash.Uint64(*(*uint64)(unsafe.Pointer(&k)))
+	case bool:
+		if k {
+			return hash.Uint64(1)
+		}
+		return hash.Uint64(0)
+	case uintptr:
+		return hash.Uint64(uint64(k))
 	default:
-		return 0
+		// Fallback for unknown types — slow path with allocation.
+		s := fmt.Sprintf("%v", key)
+		return hash.String(s)
 	}
 }

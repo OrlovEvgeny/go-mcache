@@ -1,111 +1,126 @@
 # go-mcache
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache?v1)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache) [![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
+[![Go Report Card](https://goreportcard.com/badge/github.com/OrlovEvgeny/go-mcache)](https://goreportcard.com/report/github.com/OrlovEvgeny/go-mcache)
+[![GoDoc](https://pkg.go.dev/badge/github.com/OrlovEvgeny/go-mcache)](https://pkg.go.dev/github.com/OrlovEvgeny/go-mcache)
+[![Tests](https://github.com/OrlovEvgeny/go-mcache/actions/workflows/test.yml/badge.svg)](https://github.com/OrlovEvgeny/go-mcache/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/OrlovEvgeny/go-mcache)](https://github.com/OrlovEvgeny/go-mcache/releases/latest)
 
-High-performance, thread-safe in-memory cache for Go with generics, TinyLFU eviction, lock-free data structures, and Redis-style iterators.
+Generic in-memory cache for Go with TinyLFU admission, sharded storage, and lock-free read path.
 
-## Features
+## Design
 
-- **Generic API** — Type-safe `Cache[K, V]` with any comparable key and value types
-- **TinyLFU Eviction** — Smart admission policy for better hit ratios (inspired by Ristretto)
-- **Lock-Free Structures** — Lock-free Count-Min Sketch, Bloom filter, and TinyLFU for high concurrency
-- **SIMD Optimizations** — AVX2/SSE optimized operations on amd64
-- **Cost-Based Eviction** — Evict by memory cost, not just entry count
-- **Redis-Style Iterators** — `Scan`, `ScanPrefix`, `ScanMatch` with cursor-based pagination
-- **Glob Pattern Matching** — Find keys with `*`, `?`, `[abc]`, `[a-z]` patterns
-- **Prefix Search** — O(k) prefix lookups via radix tree (for string keys)
-- **Optimized Batch Operations** — `GetBatch`, `GetBatchOptimized` with prefetching
-- **Callbacks** — `OnEvict`, `OnExpire`, `OnReject` hooks
-- **Metrics** — Hit ratio, evictions, expirations tracking
-- **GC-Free Storage** — Optional mode for reduced GC pressure (BigCache-style)
-- **Zero-Allocation Reads** — Optimized read path
-- **Backward Compatible** — Legacy `CacheDriver` API still works
+mcache combines two ideas to achieve both high hit ratios and high throughput:
 
-## Installation
+**Admission control via TinyLFU.** Not every new item gets into the cache. On insertion, a Count-Min Sketch estimates the access frequency of the incoming item and compares it against a random sample of existing entries (SampledLFU). If the new item has lower frequency, it is rejected. This prevents one-time keys from evicting frequently accessed data — a problem that LRU caches have by design. The frequency sketch uses 4-bit counters (8 bytes per ~16 tracked keys) and resets periodically to adapt to changing access patterns.
 
-```bash
+**Lock-free read path.** The TinyLFU frequency tracking (Count-Min Sketch + Bloom filter doorkeeper) is implemented with atomic operations — no mutexes on reads. The storage layer uses 1024 shards with per-shard `sync.RWMutex` and cache-line padding between shards to eliminate false sharing. As a result, read throughput scales linearly with cores.
+
+### Architecture
+
+```
+Cache[K, V]
+├── ShardedStore         1024 shards, cache-line padded, per-shard RWMutex
+│   └── map[K]*Entry     standard Go map per shard
+├── Policy[K]            generic over key type (no hash-collision ambiguity)
+│   ├── TinyLFU          doorkeeper (Bloom filter) + Count-Min Sketch
+│   └── SampledLFU[K]    dense array + map for O(1) random sampling
+├── ExpiryHeap           min-heap for TTL-based expiration, O(log n) ops
+├── RadixTree            opt-in, for prefix search on string keys
+├── WriteBuffer          lock-free ring buffer for async batching
+└── Metrics              atomic counters, zero-cost when not read
+```
+
+### Why exact-key policy matters
+
+The policy tracks entries by exact key `K`, not by hash. This means:
+- No hash collision ambiguity — two keys with the same hash are tracked independently
+- Eviction victims are returned as `{Key, KeyHash}` pairs — no reverse lookup needed
+- The `SampledLFU` uses a dense array with swap-delete, so random sampling is `O(sampleSize)` instead of `O(n)` map iteration
+
+### Expiration
+
+Entries with TTL are tracked in a min-heap. A background goroutine sweeps expired entries once per second using a shard-local collect-and-delete: each shard is locked once for the entire sweep, expired entries are removed in bulk, and policy/radix/callback updates happen outside the shard lock.
+
+## Install
+
+```
 go get github.com/OrlovEvgeny/go-mcache
 ```
 
-Requires Go 1.21+
+Requires Go 1.23+
 
-## Quick Start
-
-### Generic API (Recommended)
+## Usage
 
 ```go
-package main
-
-import (
-    "fmt"
-    "time"
-
-    "github.com/OrlovEvgeny/go-mcache"
+cache := mcache.NewCache[string, int](
+    mcache.WithMaxEntries[string, int](100_000),
 )
-
-func main() {
-    // Create a cache with string keys and int values
-    cache := mcache.NewCache[string, int]()
-    defer cache.Close()
-
-    // Set with TTL
-    cache.Set("counter", 42, 5*time.Minute)
-
-    // Get (type-safe, no casting needed)
-    if val, ok := cache.Get("counter"); ok {
-        fmt.Printf("counter = %d\n", val)
-    }
-
-    // Delete
-    cache.Delete("counter")
-}
-```
-
-### Legacy API
-
-```go
-cache := mcache.New()
 defer cache.Close()
 
-cache.Set("key", "value", 5*time.Minute)
+cache.Set("key", 42, 5*time.Minute)
 
-if val, ok := cache.Get("key"); ok {
-    fmt.Println(val.(string))
-}
+val, ok := cache.Get("key")  // type-safe, no assertion
 ```
 
-## Configuration
+### Cost-based eviction
 
 ```go
 cache := mcache.NewCache[string, []byte](
-    // Size limits
-    mcache.WithMaxEntries[string, []byte](100000),      // Max 100k entries
-    mcache.WithMaxCost[string, []byte](1<<30),          // Max 1GB total cost
-
-    // Cost function (for []byte, use length)
+    mcache.WithMaxCost[string, []byte](100 << 20), // 100 MB
     mcache.WithCostFunc[string, []byte](func(v []byte) int64 {
         return int64(len(v))
     }),
-
-    // Callbacks
-    mcache.WithOnEvict[string, []byte](func(key string, val []byte, cost int64) {
-        fmt.Printf("evicted: %s (cost=%d)\n", key, cost)
-    }),
-    mcache.WithOnExpire[string, []byte](func(key string, val []byte) {
-        fmt.Printf("expired: %s\n", key)
-    }),
-
-    // Performance tuning
-    mcache.WithShardCount[string, []byte](2048),        // More shards = less contention
-    mcache.WithNumCounters[string, []byte](1000000),    // TinyLFU counters (10x entries)
-    mcache.WithBufferItems[string, []byte](64),         // Async write buffer
-
-    // Default TTL
-    mcache.WithDefaultTTL[string, []byte](time.Hour),
 )
+
+// A 10 MB value may evict multiple smaller entries
+cache.Set("large", make([]byte, 10<<20), 0)
 ```
 
-### All Options
+### Batch reads
+
+```go
+batch := cache.GetBatchOptimized(keys)
+// Keys are sorted by shard index before lookup
+// for sequential memory access and reduced lock contention
+for i, key := range batch.Keys {
+    if batch.Found[i] {
+        process(key, batch.Values[i])
+    }
+}
+```
+
+### Prefix search (string keys, opt-in)
+
+```go
+cache := mcache.NewCache[string, int](
+    mcache.WithPrefixSearch[string, int](true),
+)
+
+cache.Set("user:1:name", 1, 0)
+cache.Set("user:1:email", 2, 0)
+cache.Set("user:2:name", 3, 0)
+
+iter := cache.ScanPrefix("user:1:", 0, 100)
+for iter.Next() {
+    fmt.Println(iter.Key()) // user:1:name, user:1:email
+}
+```
+
+### Async writes
+
+```go
+cache := mcache.NewCache[string, int](
+    mcache.WithBufferItems[string, int](64),
+)
+
+cache.Set("key", 1, 0)    // buffered, returns immediately
+cache.Wait()               // blocks until buffer is flushed
+val, _ := cache.Get("key") // guaranteed to see the value
+```
+
+When the write buffer is full, the operation falls back to synchronous execution instead of dropping the entry.
+
+## Configuration
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -114,489 +129,102 @@ cache := mcache.NewCache[string, []byte](
 | `WithNumCounters` | TinyLFU counters (recommend 10x max entries) | auto |
 | `WithShardCount` | Number of shards (power of 2) | 1024 |
 | `WithBufferItems` | Async write buffer size (0 = sync) | 0 |
-| `WithOnEvict` | Called when entry is evicted | nil |
-| `WithOnExpire` | Called when entry expires | nil |
-| `WithOnReject` | Called when entry rejected by TinyLFU | nil |
-| `WithCostFunc` | Custom cost calculator | cost=1 |
-| `WithKeyHasher` | Custom key hash function | auto |
-| `WithDefaultTTL` | Default TTL for entries | 0 (no expiry) |
-| `WithGCFreeStorage` | Use GC-free storage | false |
+| `WithDefaultTTL` | Default TTL for entries without explicit TTL | 0 (no expiry) |
+| `WithCostFunc` | Custom cost calculator | cost = 1 |
+| `WithKeyHasher` | Custom key hash function | auto (FNV-1a) |
+| `WithLockFreePolicy` | Use lock-free TinyLFU for reads | true |
+| `WithPrefixSearch` | Enable radix tree for ScanPrefix | false |
+| `WithOnEvict` | Callback on eviction | nil |
+| `WithOnExpire` | Callback on TTL expiration | nil |
+| `WithOnReject` | Callback when TinyLFU rejects entry | nil |
 
-## API Reference
+### Supported key types
 
-### Basic Operations
+Built-in zero-allocation hashing for: `string`, `int`, `int8`–`int64`, `uint`–`uint64`, `float32`, `float64`, `bool`, `uintptr`. Other `comparable` types use `fmt.Sprintf` fallback — provide `WithKeyHasher` for production use with custom types.
+
+## API
 
 ```go
-// Set with TTL (0 = no expiration)
+// Core
 cache.Set(key K, value V, ttl time.Duration) bool
-
-// Set with explicit cost
 cache.SetWithCost(key K, value V, cost int64, ttl time.Duration) bool
-
-// Get value
 cache.Get(key K) (V, bool)
-
-// Check existence
 cache.Has(key K) bool
-
-// Delete
 cache.Delete(key K) bool
-
-// Count entries
 cache.Len() int
-
-// Clear all
 cache.Clear()
-
-// Shutdown
 cache.Close()
-```
-
-### Batch Operations
-
-```go
-// Get multiple keys (simple)
-results := cache.GetMany([]string{"a", "b", "c"})
-// returns map[string]V with found entries
-
-// Get multiple keys (optimized with prefetching)
-batch := cache.GetBatch(keys)
-for i, key := range batch.Keys {
-    if batch.Found[i] {
-        fmt.Printf("%s = %v\n", key, batch.Values[i])
-    }
-}
-
-// Get multiple keys (shard-order optimized for best cache locality)
-batch := cache.GetBatchOptimized(keys)
-
-// Get batch as map
-results := cache.GetBatchToMap(keys)
-
-// Set multiple items
-items := []mcache.Item[string, int]{
-    {Key: "a", Value: 1, TTL: time.Minute},
-    {Key: "b", Value: 2, TTL: time.Minute},
-    {Key: "c", Value: 3, Cost: 100, TTL: time.Hour},
-}
-count := cache.SetMany(items)
-
-// Delete multiple keys
-deleted := cache.DeleteMany([]string{"a", "b"})
-```
-
-### Iterators (Redis-style)
-
-```go
-// Scan all entries
-iter := cache.Scan(0, 100)  // cursor=0, count=100
-for iter.Next() {
-    fmt.Printf("%v = %v\n", iter.Key(), iter.Value())
-}
-if err := iter.Err(); err != nil {
-    log.Fatal(err)
-}
-
-// Resume from cursor
-nextCursor := iter.Cursor()
-iter2 := cache.Scan(nextCursor, 100)
-```
-
-### Prefix Search (string keys only)
-
-```go
-cache := mcache.NewCache[string, int]()
-
-cache.Set("user:1:name", 1, 0)
-cache.Set("user:1:email", 2, 0)
-cache.Set("user:2:name", 3, 0)
-cache.Set("order:1", 4, 0)
-
-// Find all user:* keys
-iter := cache.ScanPrefix("user:", 0, 100)
-for iter.Next() {
-    fmt.Println(iter.Key())
-}
-// Output:
-// user:1:name
-// user:1:email
-// user:2:name
-```
-
-### Pattern Matching (string keys only)
-
-```go
-// Find keys matching pattern
-iter := cache.ScanMatch("user:*:name", 0, 100)
-for iter.Next() {
-    fmt.Println(iter.Key())
-}
-// Output:
-// user:1:name
-// user:2:name
-```
-
-**Supported patterns:**
-- `*` — matches any characters
-- `?` — matches single character
-- `**` — matches any characters including path separator
-- `[abc]` — matches any character in set
-- `[a-z]` — matches any character in range
-- `[^abc]` — matches any character NOT in set
-
-### Iterator Helpers
-
-```go
-// Collect all remaining entries
-items := iter.All()  // []Item[K, V]
-
-// Collect keys only
-keys := iter.Keys()  // []K
-
-// Collect values only
-values := iter.Values()  // []V
-
-// Count remaining
-count := iter.Count()
-
-// ForEach with early exit
-iter.ForEach(func(key K, value V) bool {
-    fmt.Println(key, value)
-    return true  // continue, false to stop
-})
-```
-
-### Metrics
-
-```go
-metrics := cache.Metrics()
-
-fmt.Printf("Hits: %d\n", metrics.Hits)
-fmt.Printf("Misses: %d\n", metrics.Misses)
-fmt.Printf("Hit Ratio: %.2f%%\n", metrics.HitRatio*100)
-fmt.Printf("Evictions: %d\n", metrics.Evictions)
-fmt.Printf("Expirations: %d\n", metrics.Expirations)
-fmt.Printf("Rejections: %d\n", metrics.Rejections)  // TinyLFU rejections
-```
-
-### Async Writes
-
-```go
-// Enable write buffering for higher throughput
-cache := mcache.NewCache[string, int](
-    mcache.WithBufferItems[string, int](64),
-)
-
-// Writes are batched asynchronously
-cache.Set("key", 42, 0)
-
-// Wait for pending writes to complete
 cache.Wait()
 
-// Now read is guaranteed to see the value
-val, _ := cache.Get("key")
+// Batch
+cache.GetMany(keys []K) map[K]V
+cache.GetBatch(keys []K) *BatchResult[K, V]
+cache.GetBatchOptimized(keys []K) *BatchResult[K, V]
+cache.SetMany(items []Item[K, V]) int
+cache.DeleteMany(keys []K) int
+
+// Iterators (cursor-based, Redis-style)
+cache.Scan(cursor uint64, count int) *Iterator[K, V]
+cache.ScanPrefix(prefix string, cursor uint64, count int) *Iterator[K, V]
+cache.ScanMatch(pattern string, cursor uint64, count int) *Iterator[K, V]
+
+// Iterator methods
+iter.Next() bool
+iter.Key() K
+iter.Value() V
+iter.All() []Item[K, V]
+iter.Keys() []K
+iter.ForEach(func(K, V) bool)
+iter.Count() int
+iter.Cursor() uint64
+iter.Close()
+
+// Metrics
+cache.Metrics() MetricsSnapshot
+// Fields: Hits, Misses, HitRatio, Sets, Deletes, Evictions,
+//         Expirations, Rejections, CostAdded, CostEvicted, BufferDrops
 ```
 
-## Architecture
+## Benchmarks
+
+Apple M4 Pro, Go 1.23. Run with `go test -bench=. -benchmem`.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                            Cache[K, V]                                    │
-├──────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │  ShardedStore   │  │     Policy      │  │      Radix Tree         │  │
-│  │  (1024 shards)  │  │ (TinyLFU+SLFU)  │  │   (prefix search)       │  │
-│  │  ┌───┐ ┌───┐    │  │  ┌──────────┐   │  │                         │  │
-│  │  │ 0 │ │ 1 │... │  │  │ CM Sketch│   │  │  Only for string keys   │  │
-│  │  └───┘ └───┘    │  │  │ (LockFree)│  │  │                         │  │
-│  │  map[K]*Entry   │  │  │ Bloom    │   │  │                         │  │
-│  │  + Prefetching  │  │  │ (LockFree)│  │  │                         │  │
-│  │  + Cache Padding│  │  │ SampledLFU│  │  │                         │  │
-│  └─────────────────┘  │  └──────────┘   │  └─────────────────────────┘  │
-│                       └─────────────────┘                                │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │
-│  │  Write Buffer   │  │    Metrics      │  │    Expiration Worker    │  │
-│  │ (ring buffer)   │  │  (atomic ops)   │  │  (background goroutine) │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────┘
+BenchmarkCacheGet                  4,915,591     445.9 ns/op     0 B/op    0 allocs/op
+BenchmarkCacheSet                  2,185,386    1061   ns/op    49 B/op    1 allocs/op
+BenchmarkCacheSetWithTTL           2,511,756     973.9 ns/op    49 B/op    1 allocs/op
+BenchmarkCacheMixed                4,878,026     473.3 ns/op     9 B/op    0 allocs/op
+BenchmarkCacheHas                137,653,788      17.5 ns/op     0 B/op    0 allocs/op
+BenchmarkCacheOperations/Read     40,523,341      58.0 ns/op     5 B/op    0 allocs/op
+BenchmarkCacheZipf                   683,647    3624   ns/op    13 B/op    0 allocs/op
 ```
 
-### TinyLFU Admission Policy
+`CacheGet` includes TinyLFU frequency tracking on every access. `CacheHas` is a pure shard lookup without policy update. The difference (~17 ns vs ~446 ns) shows the cost of the admission policy — which is the tradeoff for better hit ratios on skewed workloads (`CacheZipf` achieves 87.4% hit rate).
 
-When the cache is full and a new item arrives:
-
-1. **Doorkeeper** — Lock-free Bloom filter checks if item was seen before
-2. **Count-Min Sketch** — Lock-free frequency estimation (8-bit atomic counters)
-3. **Sampled LFU** — Samples 5 random victims, picks lowest frequency
-4. **Admission** — New item admitted only if frequency > victim
-
-This prevents "one-hit wonders" from evicting frequently accessed items.
-
-### Lock-Free Data Structures
-
-The cache uses lock-free implementations for the hot path:
-
-- **Lock-Free Count-Min Sketch** — 8-bit atomic counters packed in `atomic.Uint32`, CAS-based increments
-- **Lock-Free Bloom Filter** — Atomic bit operations with `atomic.Uint64`
-- **Lock-Free TinyLFU** — Completely lock-free `Access()` path for read operations
-
-This eliminates contention on the admission policy during concurrent reads.
-
-### Advanced Data Structures
-
-The library includes several advanced data structures:
-
-- **Blocked Bloom Filter** — Cache-line sized blocks (512 bits) for 1 cache miss max per lookup
-- **Cuckoo Filter** — Supports deletion, only 2 memory accesses per lookup
-- **Swiss Table** — SIMD-friendly hash table with 16-byte control groups
-
-### Storage Options
-
-**Standard (default):**
-- `map[K]*Entry[K,V]` per shard
-- Works with any value type
-- Values tracked by GC
-- Cache-line padded shards to prevent false sharing
-
-**GC-Free (opt-in):**
-- `map[uint64]uint32` + byte slices
-- Values serialized, invisible to GC
-- Best for `[]byte` values and large caches
-- Reduces GC pause times
-
-```go
-cache := mcache.NewCache[string, []byte](
-    mcache.WithGCFreeStorage[string, []byte](),
-)
-```
-
-## Performance
-
-Benchmarks on Apple M4 Pro (arm64):
-
-### Generic API (with TinyLFU)
+Lock-free internals:
 
 ```
-BenchmarkCacheGet-12                          4915591    445.9 ns/op     0 B/op    0 allocs/op
-BenchmarkCacheSet-12                          2185386   1061   ns/op    49 B/op    1 allocs/op
-BenchmarkCacheSetWithTTL-12                   2511756    973.9 ns/op    49 B/op    1 allocs/op
-BenchmarkCacheMixed-12                        4878026    473.3 ns/op     9 B/op    0 allocs/op
-BenchmarkCacheHas-12                        137653788     17.48 ns/op    0 B/op    0 allocs/op
-BenchmarkCacheOperations/Read-12             40523341     57.98 ns/op    5 B/op    0 allocs/op
-BenchmarkCacheOperations/ParallelReadWrite-12 11975133   229.5 ns/op    94 B/op    3 allocs/op
-BenchmarkCacheOperationsPreallocated/Read-12  75477038    31.97 ns/op    0 B/op    0 allocs/op
-BenchmarkCacheZipf-12                          683647   3624   ns/op   87.40 hit%  13 B/op  0 allocs/op
+BenchmarkCMSketchLockFreeIncrement            58,410,620    20.8 ns/op    0 B/op
+BenchmarkCMSketchLockFreeIncrementParallel    43,926,879    24.5 ns/op    0 B/op
+BenchmarkBloomFilterLockFreeAddParallel      889,117,638     1.3 ns/op    0 B/op
+BenchmarkPolicyLockFreeAccess                 35,165,865    36.3 ns/op    0 B/op
 ```
 
-### Lock-Free Structures Performance
+Parallel CM Sketch throughput degrades only ~18% from single-goroutine, showing the lock-free design scales under contention.
 
-```
-BenchmarkCMSketchLockFreeIncrement-12         58410620   20.76 ns/op    0 B/op    0 allocs/op
-BenchmarkCMSketchLockFreeIncrementParallel-12 43926879   24.45 ns/op    0 B/op    0 allocs/op
-BenchmarkBloomFilterLockFreeAdd-12           123533065    9.52 ns/op    0 B/op    0 allocs/op
-BenchmarkBloomFilterLockFreeAddParallel-12   889117638    1.25 ns/op    0 B/op    0 allocs/op
-BenchmarkTinyLFULockFreeIncrement-12          32159007   38.91 ns/op    0 B/op    0 allocs/op
-BenchmarkPolicyLockFreeAccess-12              35165865   36.34 ns/op    0 B/op    0 allocs/op
-```
+## Thread safety
 
-### Comparison: Lock-Free vs Original
+All operations are safe for concurrent use. The concurrency model:
 
-| Operation | Original | Lock-Free | Improvement |
-|-----------|----------|-----------|-------------|
-| CM Sketch Increment | 38.23 ns | 20.76 ns | **1.84x faster** |
-| Bloom Filter Add | 13.39 ns | 9.52 ns | **1.41x faster** |
-| TinyLFU Increment | 46.73 ns | 38.91 ns | **1.20x faster** |
+- **Reads**: shard RLock + lock-free TinyLFU access → no global contention
+- **Writes**: shard Lock + policy mutex (held only during eviction decision)
+- **Expiration**: shard-local sweep under write lock, policy/callback updates outside lock
+- **Metrics**: atomic counters, no locks
+- **Shards**: cache-line padded to prevent false sharing between cores
 
-### Advanced Structures
+## Legacy API
 
-```
-BenchmarkBlockedBloomFilterContains-12  272477785   4.05 ns/op    0 B/op    0 allocs/op
-BenchmarkSwissTableGet-12                47139546  26.22 ns/op    0 B/op    0 allocs/op
-```
-
-### Legacy API (no TinyLFU)
-
-```
-BenchmarkLegacyGet-12       57359919     21 ns/op      0 B/op    0 allocs/op
-BenchmarkLegacySet-12        6964370    222 ns/op     72 B/op    1 allocs/op
-BenchmarkLegacyMixed-12     23142158     75 ns/op     14 B/op    0 allocs/op
-```
-
-The generic API is slower due to TinyLFU policy overhead, but provides:
-- Better hit ratio on skewed workloads
-- Cost-based eviction
-- Iterator support
-- Prefix search
-- Metrics
-
-**Run benchmarks:**
-```bash
-go test -bench=. -benchmem
-```
-
-## Examples
-
-### Session Cache
-
-```go
-type Session struct {
-    UserID    int64
-    Token     string
-    ExpiresAt time.Time
-}
-
-cache := mcache.NewCache[string, *Session](
-    mcache.WithMaxEntries[string, *Session](100000),
-    mcache.WithDefaultTTL[string, *Session](24*time.Hour),
-    mcache.WithOnExpire[string, *Session](func(key string, s *Session) {
-        log.Printf("session expired: user=%d", s.UserID)
-    }),
-)
-
-// Store session
-cache.Set(sessionToken, &Session{
-    UserID: 123,
-    Token:  sessionToken,
-}, 0)  // Uses default TTL
-
-// Lookup
-if session, ok := cache.Get(sessionToken); ok {
-    fmt.Printf("User: %d\n", session.UserID)
-}
-```
-
-### Rate Limiter
-
-```go
-cache := mcache.NewCache[string, int](
-    mcache.WithDefaultTTL[string, int](time.Minute),
-)
-
-func checkRateLimit(ip string, limit int) bool {
-    count, _ := cache.Get(ip)
-    if count >= limit {
-        return false
-    }
-    cache.Set(ip, count+1, 0)
-    return true
-}
-```
-
-### LRU-style Cache with Cost
-
-```go
-cache := mcache.NewCache[string, []byte](
-    mcache.WithMaxCost[string, []byte](100<<20),  // 100MB
-    mcache.WithCostFunc[string, []byte](func(v []byte) int64 {
-        return int64(len(v))
-    }),
-)
-
-// Large values will evict multiple small ones
-cache.Set("large", make([]byte, 10<<20), 0)  // 10MB
-```
-
-### High-Throughput Batch Operations
-
-```go
-cache := mcache.NewCache[string, int]()
-
-// Prefill cache
-for i := 0; i < 10000; i++ {
-    cache.Set(fmt.Sprintf("key:%d", i), i, 0)
-}
-
-// Batch read with prefetching (30-50% faster than individual reads)
-keys := []string{"key:1", "key:2", "key:3", "key:100", "key:500"}
-batch := cache.GetBatchOptimized(keys)
-
-for i, key := range batch.Keys {
-    if batch.Found[i] {
-        fmt.Printf("%s = %d\n", key, batch.Values[i])
-    }
-}
-```
-
-### User Data with Prefix Queries
-
-```go
-cache := mcache.NewCache[string, string]()
-
-// Store user data with namespaced keys
-cache.Set("user:1:name", "Alice", 0)
-cache.Set("user:1:email", "alice@example.com", 0)
-cache.Set("user:2:name", "Bob", 0)
-cache.Set("user:2:email", "bob@example.com", 0)
-
-// Get all data for user 1
-iter := cache.ScanPrefix("user:1:", 0, 100)
-for iter.Next() {
-    fmt.Printf("%s = %s\n", iter.Key(), iter.Value())
-}
-
-// Find all email keys
-iter = cache.ScanMatch("user:*:email", 0, 100)
-emails := iter.Values()
-```
-
-### Different Key Types
-
-```go
-// Integer keys
-intCache := mcache.NewCache[int, string]()
-intCache.Set(42, "answer", 0)
-
-// Struct keys (must be comparable)
-type CacheKey struct {
-    Namespace string
-    ID        int64
-}
-structCache := mcache.NewCache[CacheKey, []byte]()
-structCache.Set(CacheKey{"users", 123}, data, time.Hour)
-```
-
-## Migration from v1
-
-The legacy API (`mcache.New()`) remains fully functional. To migrate to the generic API:
-
-```go
-// Before (v1)
-cache := mcache.New()
-cache.Set("key", myValue, time.Hour)
-val, ok := cache.Get("key")
-if ok {
-    typed := val.(MyType)  // Type assertion needed
-}
-
-// After (v2)
-cache := mcache.NewCache[string, MyType]()
-cache.Set("key", myValue, time.Hour)
-val, ok := cache.Get("key")  // val is already MyType
-```
-
-## Thread Safety
-
-All operations are thread-safe. The cache uses:
-- Sharded storage with per-shard `sync.RWMutex`
-- Lock-free TinyLFU admission policy for read path
-- Atomic operations for metrics
-- Lock-free ring buffer for async writes
-- Cache-line padded structures to prevent false sharing
-
-## Internal Packages
-
-The library includes several optimized internal packages:
-
-| Package | Description |
-|---------|-------------|
-| `internal/policy` | TinyLFU, Count-Min Sketch, Bloom filters (lock-free variants) |
-| `internal/store` | Sharded storage with prefetching and batch operations |
-| `internal/hashtable` | Swiss table implementation |
-| `internal/hash` | FNV-1a hashing with batch operations |
-| `internal/prefetch` | CPU prefetch intrinsics (amd64) |
-| `internal/alloc` | Aligned memory allocation for SIMD |
-| `internal/radix` | Radix tree for prefix search |
-| `internal/glob` | Glob pattern matching |
+The `mcache.New()` / `CacheDriver` API from v1 still works. It uses `safeMap` + GC-based expiration without TinyLFU. See `mcache.go` and `gcmap/` for details. For new code, use the generic `NewCache[K, V]` API.
 
 ## License
 

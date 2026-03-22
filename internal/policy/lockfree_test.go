@@ -155,19 +155,19 @@ func TestTinyLFULockFreeConcurrent(t *testing.T) {
 }
 
 func TestPolicyLockFree(t *testing.T) {
-	p := NewPolicyLockFree(1000, 100, 0)
+	p := NewPolicyLockFree[uint64](1000, 100, 0)
 
-	_, added := p.Add(1, 30)
+	_, added := p.Add(1, 1, 30)
 	if !added {
 		t.Error("First entry should be added")
 	}
 
-	_, added = p.Add(2, 30)
+	_, added = p.Add(2, 2, 30)
 	if !added {
 		t.Error("Second entry should be added")
 	}
 
-	_, added = p.Add(3, 30)
+	_, added = p.Add(3, 3, 30)
 	if !added {
 		t.Error("Third entry should be added")
 	}
@@ -182,13 +182,13 @@ func TestPolicyLockFree(t *testing.T) {
 }
 
 func TestPolicyLockFreeConcurrentAccess(t *testing.T) {
-	p := NewPolicyLockFree(1 << 16, 0, 0)
+	p := NewPolicyLockFree[uint64](1 << 16, 0, 0)
 	const numGoroutines = 16
 	const numOps = 10000
 
 	// Pre-add some keys
 	for i := 0; i < 100; i++ {
-		p.Add(uint64(i), 1)
+		p.Add(uint64(i), uint64(i), 1)
 	}
 
 	var wg sync.WaitGroup
@@ -319,7 +319,7 @@ func BenchmarkTinyLFULockFreeIncrementParallel(b *testing.B) {
 }
 
 func BenchmarkPolicyLockFreeAccess(b *testing.B) {
-	p := NewPolicyLockFree(1<<20, 0, 0)
+	p := NewPolicyLockFree[uint64](1<<20, 0, 0)
 	rng := rand.New(rand.NewSource(42))
 
 	b.ResetTimer()
@@ -329,7 +329,7 @@ func BenchmarkPolicyLockFreeAccess(b *testing.B) {
 }
 
 func BenchmarkPolicyLockFreeAccessParallel(b *testing.B) {
-	p := NewPolicyLockFree(1<<20, 0, 0)
+	p := NewPolicyLockFree[uint64](1<<20, 0, 0)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

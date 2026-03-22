@@ -2,3 +2,6 @@
 *.sw[pno]
 .bashrc
 /src
+cpu.prof
+mem.prof
+go-mcache.test

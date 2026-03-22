@@ -11,8 +11,9 @@ type Metrics struct {
 	evictions  atomic.Int64 // Evictions due to size/cost limit
 	expirations atomic.Int64 // Expirations due to TTL
 	rejections atomic.Int64 // Rejections by TinyLFU admission policy
-	costAdded  atomic.Int64 // Total cost added
+	costAdded   atomic.Int64 // Total cost added
 	costEvicted atomic.Int64 // Total cost evicted
+	bufferDrops atomic.Int64 // Buffer saturation drops (sync fallback used)
 }
 
 // MetricsSnapshot is a point-in-time snapshot of cache metrics.
@@ -26,6 +27,7 @@ type MetricsSnapshot struct {
 	Rejections  int64   // Total rejections by admission policy
 	CostAdded   int64   // Total cost added over time
 	CostEvicted int64   // Total cost evicted over time
+	BufferDrops int64   // Times buffer was full and sync fallback was used
 	HitRatio    float64 // Hit ratio (hits / (hits + misses))
 }
 
@@ -79,6 +81,11 @@ func (m *Metrics) addEvictedCost(cost int64) {
 	m.costEvicted.Add(cost)
 }
 
+// incBufferDrop increments the buffer drop counter.
+func (m *Metrics) incBufferDrop() {
+	m.bufferDrops.Add(1)
+}
+
 // Snapshot returns a point-in-time snapshot of the metrics.
 func (m *Metrics) Snapshot() MetricsSnapshot {
 	hits := m.hits.Load()
@@ -100,6 +107,7 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		Rejections:  m.rejections.Load(),
 		CostAdded:   m.costAdded.Load(),
 		CostEvicted: m.costEvicted.Load(),
+		BufferDrops: m.bufferDrops.Load(),
 		HitRatio:    hitRatio,
 	}
 }
@@ -115,4 +123,5 @@ func (m *Metrics) Reset() {
 	m.rejections.Store(0)
 	m.costAdded.Store(0)
 	m.costEvicted.Store(0)
+	m.bufferDrops.Store(0)
 }

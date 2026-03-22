@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'       # v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'     # v1.2.3-rc.1, v1.2.3-beta.1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Validate semver tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Tag '$TAG' is not valid semver"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  release:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Get tag info
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          if echo "$TAG" | grep -qE '-(alpha|beta|rc)'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find previous tag
+        id: prev
+        run: |
+          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${GITHUB_REF#refs/tags/}$" | head -1)
+          if [ -z "$PREV" ]; then
+            # No previous tag — use first commit
+            PREV=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.tag.outputs.version }}"
+          PREV="${{ steps.prev.outputs.tag }}"
+
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            # Categorize commits by conventional commit prefix
+            echo "## What's Changed"
+            echo ""
+
+            # Features
+            FEATS=$(git log "$PREV"..HEAD --pretty=format:'%s|%h' --no-merges | grep -iE '^\s*(feat|feature)' | head -50 || true)
+            if [ -n "$FEATS" ]; then
+              echo "### Features"
+              echo "$FEATS" | while IFS='|' read -r msg sha; do
+                echo "- ${msg} (\`${sha}\`)"
+              done
+              echo ""
+            fi
+
+            # Bug fixes
+            FIXES=$(git log "$PREV"..HEAD --pretty=format:'%s|%h' --no-merges | grep -iE '^\s*(fix|bugfix)' | head -50 || true)
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES" | while IFS='|' read -r msg sha; do
+                echo "- ${msg} (\`${sha}\`)"
+              done
+              echo ""
+            fi
+
+            # Performance
+            PERFS=$(git log "$PREV"..HEAD --pretty=format:'%s|%h' --no-merges | grep -iE '^\s*perf' | head -50 || true)
+            if [ -n "$PERFS" ]; then
+              echo "### Performance"
+              echo "$PERFS" | while IFS='|' read -r msg sha; do
+                echo "- ${msg} (\`${sha}\`)"
+              done
+              echo ""
+            fi
+
+            # Other changes (not matching feat/fix/perf and not merge commits)
+            OTHERS=$(git log "$PREV"..HEAD --pretty=format:'%s|%h' --no-merges | grep -ivE '^\s*(feat|feature|fix|bugfix|perf)' | head -50 || true)
+            if [ -n "$OTHERS" ]; then
+              echo "### Other Changes"
+              echo "$OTHERS" | while IFS='|' read -r msg sha; do
+                echo "- ${msg} (\`${sha}\`)"
+              done
+              echo ""
+            fi
+
+            # Contributors
+            echo "### Contributors"
+            git log "$PREV"..HEAD --pretty=format:'%aN' --no-merges | sort -u | while read -r name; do
+              echo "- @${name}"
+            done
+            echo ""
+
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV}...${{ steps.tag.outputs.version }}"
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.version }}
+          name: ${{ steps.tag.outputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+          generate_release_notes: false

@@ -48,6 +48,7 @@ type GC struct {
 	stopSignal chan struct{}
 	wakeSignal chan struct{}
 	wg         sync.WaitGroup
+	stopOnce   sync.Once
 	options    gcOptions
 }
 
@@ -117,7 +118,7 @@ func (gc *GC) Expired(key string, duration time.Duration) {
 }
 
 // run is the main loop that waits for and processes expirations.
-// Optimized to reduce lock contention by merging lock acquisitions.
+// Optimized to block properly without busy-looping.
 func (gc *GC) run(ctx context.Context) {
 	defer gc.wg.Done()
 	defer func() {
@@ -132,8 +133,17 @@ func (gc *GC) run(ctx context.Context) {
 		gc.mu.Lock()
 		nextInterval := gc.calculateNextWakeIntervalLocked()
 
-		switch {
-		case nextInterval > 0:
+		// Handle immediate processing before entering select
+		if nextInterval == 0 {
+			gc.mu.Unlock()
+			gc.processExpiredKeys()
+			continue
+		}
+
+		// Setup timer based on next interval
+		var timerC <-chan time.Time
+		if nextInterval > 0 {
+			// We have a scheduled expiration
 			if gc.timer == nil {
 				gc.timer = time.NewTimer(nextInterval)
 			} else {
@@ -145,29 +155,25 @@ func (gc *GC) run(ctx context.Context) {
 				}
 				gc.timer.Reset(nextInterval)
 			}
-		case nextInterval == 0:
-			// Process immediately
-		default: // heap is empty
-			if gc.timer != nil {
+			timerC = gc.timer.C
+		} else {
+			// Heap is empty, use default poll interval
+			if gc.timer == nil {
+				gc.timer = time.NewTimer(gc.options.defaultPollInterval)
+			} else {
 				if !gc.timer.Stop() {
 					select {
 					case <-gc.timer.C:
 					default:
 					}
 				}
-				gc.timer = nil
+				gc.timer.Reset(gc.options.defaultPollInterval)
 			}
-			nextInterval = gc.options.defaultPollInterval
-		}
-
-		var timerC <-chan time.Time
-		if gc.timer != nil && nextInterval > 0 {
 			timerC = gc.timer.C
 		}
 		gc.mu.Unlock()
 
-		processNow := nextInterval == 0
-
+		// Block until one of the channels is ready - NO default case!
 		select {
 		case <-ctx.Done():
 			return
@@ -177,20 +183,6 @@ func (gc *GC) run(ctx context.Context) {
 			continue
 		case <-timerC:
 			gc.processExpiredKeys()
-		default:
-			if processNow {
-				gc.processExpiredKeys()
-			} else if nextInterval < 0 {
-				select {
-				case <-time.After(gc.options.defaultPollInterval):
-				case <-ctx.Done():
-					return
-				case <-gc.stopSignal:
-					return
-				case <-gc.wakeSignal:
-					continue
-				}
-			}
 		}
 	}
 }
@@ -234,9 +226,11 @@ func (gc *GC) signalWakeUp() {
 	}
 }
 
-// Stop shuts down the GC loop gracefully.
+// Stop shuts down the GC loop gracefully. Safe to call multiple times.
 func (gc *GC) Stop() {
-	close(gc.stopSignal)
+	gc.stopOnce.Do(func() {
+		close(gc.stopSignal)
+	})
 	gc.wg.Wait()
 }
 

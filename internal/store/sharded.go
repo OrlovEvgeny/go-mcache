@@ -2,6 +2,8 @@
 package store
 
 import (
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -40,8 +42,8 @@ func (e *Entry[K, V]) IsExpired() bool {
 // Optimized with cache line padding to prevent false sharing between shards.
 type shard[K comparable, V any] struct {
 	// Hot data: frequently accessed together
-	mu sync.RWMutex          // 24 bytes on 64-bit
-	m  map[K]*Entry[K, V]    // 8 bytes (pointer to map header)
+	mu sync.RWMutex       // 24 bytes on 64-bit
+	m  map[K]*Entry[K, V] // 8 bytes (pointer to map header)
 	_  [cacheLineSize - 32]byte // Pad to cache line boundary
 
 	// Statistics on separate cache line to avoid contention
@@ -135,8 +137,7 @@ func anyToString[K comparable](key K) string {
 	case string:
 		return k
 	default:
-		// Use a simple representation
-		return ""
+		return fmt.Sprintf("%v", key)
 	}
 }
 
@@ -314,41 +315,8 @@ func (s *ShardedStore[K, V]) ShardCount() int {
 // DeleteExpired removes all expired entries.
 // Returns the number of entries removed.
 func (s *ShardedStore[K, V]) DeleteExpired() int {
-	now := clock.NowNano()
-	removed := 0
-
-	for _, sh := range s.shards {
-		sh.mu.Lock()
-		for key, entry := range sh.m {
-			if entry.ExpireAt > 0 && now > entry.ExpireAt {
-				delete(sh.m, key)
-				removed++
-			}
-		}
-		sh.mu.Unlock()
-	}
-
-	s.size.Add(-int64(removed))
-	return removed
-}
-
-// CollectExpired collects entries that have expired.
-// Useful for calling expiration callbacks.
-func (s *ShardedStore[K, V]) CollectExpired() []*Entry[K, V] {
-	now := clock.NowNano()
-	var expired []*Entry[K, V]
-
-	for _, sh := range s.shards {
-		sh.mu.RLock()
-		for _, entry := range sh.m {
-			if entry.ExpireAt > 0 && now > entry.ExpireAt {
-				expired = append(expired, entry)
-			}
-		}
-		sh.mu.RUnlock()
-	}
-
-	return expired
+	expired := s.CollectExpired(clock.NowNano())
+	return len(expired)
 }
 
 // Keys returns all keys (may include expired entries).
@@ -423,6 +391,27 @@ func (s *ShardedStore[K, V]) Scan(cursor uint64, count int) ([]*Entry[K, V], uin
 // KeyHash returns the hash function used by this store.
 func (s *ShardedStore[K, V]) KeyHash(key K) uint64 {
 	return s.getKeyHash(key)
+}
+
+// CollectExpired atomically removes all expired entries from each shard.
+// Returns the removed entries for post-processing (policy/heap/radix cleanup).
+// Uses a single write lock per shard for the entire sweep.
+func (s *ShardedStore[K, V]) CollectExpired(now int64) []*Entry[K, V] {
+	var expired []*Entry[K, V]
+	for _, sh := range s.shards {
+		sh.mu.Lock()
+		for key, entry := range sh.m {
+			if entry.ExpireAt > 0 && now > entry.ExpireAt {
+				delete(sh.m, key)
+				expired = append(expired, entry)
+			}
+		}
+		sh.mu.Unlock()
+	}
+	if len(expired) > 0 {
+		s.size.Add(-int64(len(expired)))
+	}
+	return expired
 }
 
 // BatchRequest represents a batch get request.
@@ -523,15 +512,16 @@ func (s *ShardedStore[K, V]) GetBatchByShardOrder(keys []K) ([]*Entry[K, V], []b
 		}
 	}
 
-	// Sort by shard index for cache locality
-	// Simple insertion sort for small batches, good enough for typical sizes
-	for i := 1; i < n; i++ {
-		j := i
-		for j > 0 && infos[j].shardIdx < infos[j-1].shardIdx {
-			infos[j], infos[j-1] = infos[j-1], infos[j]
-			j--
+	// Sort by shard index for cache locality — O(n log n)
+	slices.SortFunc(infos, func(a, b keyInfo) int {
+		if a.shardIdx < b.shardIdx {
+			return -1
 		}
-	}
+		if a.shardIdx > b.shardIdx {
+			return 1
+		}
+		return 0
+	})
 
 	results := make([]*Entry[K, V], n)
 	found := make([]bool, n)

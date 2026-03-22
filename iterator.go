@@ -1,6 +1,8 @@
 package mcache
 
 import (
+	"strings"
+
 	"github.com/OrlovEvgeny/go-mcache/internal/glob"
 	"github.com/OrlovEvgeny/go-mcache/internal/store"
 )
@@ -12,7 +14,8 @@ type Iterator[K comparable, V any] struct {
 	count   int
 	prefix  string
 	pattern *glob.Pattern
-	page    []*store.Entry[K, V]
+	buffer  []*store.Entry[K, V] // Buffered entries from scan
+	page    []*store.Entry[K, V] // Current page being served
 	pos     int
 	err     error
 	done    bool
@@ -33,6 +36,25 @@ func newIterator[K comparable, V any](c *Cache[K, V], cursor uint64, count int, 
 	}
 }
 
+// Close releases resources associated with the iterator.
+func (it *Iterator[K, V]) Close() {
+	// Clear buffer
+	if it.buffer != nil {
+		for i := range it.buffer {
+			it.buffer[i] = nil
+		}
+		it.buffer = nil
+	}
+	// Clear page
+	if it.page != nil {
+		for i := range it.page {
+			it.page[i] = nil
+		}
+		it.page = nil
+	}
+	it.done = true
+}
+
 // newEmptyIterator creates an empty iterator (for unsupported operations).
 func newEmptyIterator[K comparable, V any]() *Iterator[K, V] {
 	return &Iterator[K, V]{done: true}
@@ -41,7 +63,7 @@ func newEmptyIterator[K comparable, V any]() *Iterator[K, V] {
 // Next advances the iterator to the next entry.
 // Returns true if there is an entry available, false when exhausted.
 func (it *Iterator[K, V]) Next() bool {
-	if it.done || it.err != nil {
+	if it.err != nil {
 		return false
 	}
 
@@ -50,12 +72,17 @@ func (it *Iterator[K, V]) Next() bool {
 
 	// Need to fetch next page?
 	if it.pos >= len(it.page) {
+		// If scan already completed, no more pages to fetch
+		if it.done {
+			return false
+		}
 		if !it.fetchPage() {
 			return false
 		}
+		// fetchPage sets pos to 0, so we're at the first element
 	}
 
-	return true
+	return it.pos < len(it.page)
 }
 
 // fetchPage retrieves the next page of entries.
@@ -65,42 +92,55 @@ func (it *Iterator[K, V]) fetchPage() bool {
 		return false
 	}
 
+	if it.done {
+		return false
+	}
+
 	// Use prefix search if we have a prefix and string keys
 	if it.prefix != "" && it.cache.isStringKey && it.cache.radixTree != nil {
 		return it.fetchPrefixPage()
 	}
 
-	// Full scan
-	entries, nextCursor := it.cache.store.Scan(it.cursor, it.count*2) // Fetch extra for filtering
-	if len(entries) == 0 {
-		it.done = true
-		return false
-	}
+	// Fill buffer if empty
+	for len(it.buffer) == 0 && !it.done {
+		entries, nextCursor := it.cache.store.Scan(it.cursor, it.count*2)
 
-	// Filter entries if we have a pattern
-	filtered := make([]*store.Entry[K, V], 0, it.count)
-	for _, entry := range entries {
-		if it.matchEntry(entry) {
-			filtered = append(filtered, entry)
-			if len(filtered) >= it.count {
-				break
+		for _, entry := range entries {
+			if it.matchEntry(entry) {
+				it.buffer = append(it.buffer, entry)
 			}
+		}
+
+		it.cursor = nextCursor
+		if nextCursor == 0 {
+			it.done = true
 		}
 	}
 
-	it.page = filtered
-	it.pos = 0
-	it.cursor = nextCursor
-
-	if nextCursor == 0 {
-		it.done = len(it.page) == 0
+	if len(it.buffer) == 0 {
+		return false
 	}
 
-	return len(it.page) > 0
+	// Serve up to count entries from the buffer
+	n := it.count
+	if n > len(it.buffer) {
+		n = len(it.buffer)
+	}
+
+	it.page = it.buffer[:n]
+	it.buffer = it.buffer[n:]
+	it.pos = 0
+
+	return true
 }
 
 // fetchPrefixPage retrieves the next page using radix tree prefix search.
 func (it *Iterator[K, V]) fetchPrefixPage() bool {
+	// If already done, don't refetch
+	if it.done {
+		return false
+	}
+
 	// Get key hashes matching the prefix
 	hashes := it.cache.radixTree.FindByPrefix(it.prefix, it.count*2)
 	if len(hashes) == 0 {
@@ -115,8 +155,19 @@ func (it *Iterator[K, V]) fetchPrefixPage() bool {
 		return false
 	}
 
+	// Reuse existing page slice if possible
+	var entries []*store.Entry[K, V]
+	if it.page != nil && cap(it.page) >= it.count {
+		// Clear and reuse
+		for i := range it.page {
+			it.page[i] = nil
+		}
+		entries = it.page[:0]
+	} else {
+		entries = make([]*store.Entry[K, V], 0, it.count)
+	}
+
 	// Collect entries
-	entries := make([]*store.Entry[K, V], 0, it.count)
 	for i := start; i < len(hashes) && len(entries) < it.count; i++ {
 		keyHash := hashes[i]
 		// Find entry by hash
@@ -135,8 +186,9 @@ func (it *Iterator[K, V]) fetchPrefixPage() bool {
 	it.pos = 0
 	it.cursor = uint64(start + len(entries))
 
+	// Mark done if we've consumed all hashes
 	if start+len(entries) >= len(hashes) {
-		it.done = len(entries) == 0
+		it.done = true
 	}
 
 	return len(entries) > 0
@@ -147,6 +199,15 @@ func (it *Iterator[K, V]) matchEntry(entry *store.Entry[K, V]) bool {
 	// Check expiration
 	if entry.IsExpired() {
 		return false
+	}
+
+	// Check prefix match for string keys (when radix tree is not available)
+	if it.prefix != "" {
+		if strKey, ok := any(entry.Key).(string); ok {
+			if !strings.HasPrefix(strKey, it.prefix) {
+				return false
+			}
+		}
 	}
 
 	// Check pattern match for string keys
@@ -198,7 +259,12 @@ func (it *Iterator[K, V]) Err() error {
 // All collects all remaining entries and returns them.
 // Warning: This may be memory-intensive for large result sets.
 func (it *Iterator[K, V]) All() []Item[K, V] {
-	var items []Item[K, V]
+	// Pre-allocate with estimated capacity based on count hint
+	estimatedCap := it.count * 2
+	if estimatedCap < 16 {
+		estimatedCap = 16
+	}
+	items := make([]Item[K, V], 0, estimatedCap)
 	for it.Next() {
 		items = append(items, Item[K, V]{
 			Key:   it.Key(),
@@ -210,7 +276,12 @@ func (it *Iterator[K, V]) All() []Item[K, V] {
 
 // Keys collects all remaining keys and returns them.
 func (it *Iterator[K, V]) Keys() []K {
-	var keys []K
+	// Pre-allocate with estimated capacity based on count hint
+	estimatedCap := it.count * 2
+	if estimatedCap < 16 {
+		estimatedCap = 16
+	}
+	keys := make([]K, 0, estimatedCap)
 	for it.Next() {
 		keys = append(keys, it.Key())
 	}
@@ -219,7 +290,12 @@ func (it *Iterator[K, V]) Keys() []K {
 
 // Values collects all remaining values and returns them.
 func (it *Iterator[K, V]) Values() []V {
-	var values []V
+	// Pre-allocate with estimated capacity based on count hint
+	estimatedCap := it.count * 2
+	if estimatedCap < 16 {
+		estimatedCap = 16
+	}
+	values := make([]V, 0, estimatedCap)
 	for it.Next() {
 		values = append(values, it.Value())
 	}

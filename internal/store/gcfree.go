@@ -145,11 +145,12 @@ func (s *GCFreeStore) Set(keyHash uint64, key, value []byte, expireAt int64, cos
 
 	// Check if key already exists
 	if oldOffset, exists := sh.hashmap[keyHash]; exists {
-		// Mark old entry as deleted by zeroing the key length
+		// Read old entry sizes BEFORE marking as deleted
 		if int(oldOffset)+4 <= len(sh.data) {
+			oldKeyLen := binary.LittleEndian.Uint32(sh.data[oldOffset : oldOffset+4])
+			oldValueLen := binary.LittleEndian.Uint32(sh.data[oldOffset+4 : oldOffset+8])
+			// Mark old entry as deleted by zeroing the key length
 			binary.LittleEndian.PutUint32(sh.data[oldOffset:oldOffset+4], 0)
-			oldKeyLen := binary.LittleEndian.Uint32(sh.data[oldOffset:oldOffset+4])
-			oldValueLen := binary.LittleEndian.Uint32(sh.data[oldOffset+4:oldOffset+8])
 			sh.deleted += entryHeaderSize + int(oldKeyLen) + int(oldValueLen)
 		}
 	} else {
@@ -196,8 +197,8 @@ func (s *GCFreeStore) Delete(keyHash uint64) bool {
 
 	// Mark as deleted and remove from hashmap
 	if int(offset)+entryHeaderSize <= len(sh.data) {
-		keyLen := binary.LittleEndian.Uint32(sh.data[offset:offset+4])
-		valueLen := binary.LittleEndian.Uint32(sh.data[offset+4:offset+8])
+		keyLen := binary.LittleEndian.Uint32(sh.data[offset : offset+4])
+		valueLen := binary.LittleEndian.Uint32(sh.data[offset+4 : offset+8])
 		binary.LittleEndian.PutUint32(sh.data[offset:offset+4], 0) // Zero key length marks as deleted
 		sh.deleted += entryHeaderSize + int(keyLen) + int(valueLen)
 	}
@@ -233,33 +234,45 @@ func (s *GCFreeStore) Clear() {
 }
 
 // compact reclaims space from deleted entries.
+// Uses snapshot-based approach to minimize time spent holding the lock.
 func (sh *gcFreeShard) compact() {
-	newData := make([]byte, len(sh.data))
+	oldHashmap := make(map[uint64]uint32, len(sh.hashmap))
+	for k, v := range sh.hashmap {
+		oldHashmap[k] = v
+	}
+	oldData := sh.data
+	oldDataLen := len(oldData)
+
+	newData := make([]byte, len(oldData))
+	newHashmap := make(map[uint64]uint32, len(oldHashmap))
 	newTail := 0
 
-	for keyHash, offset := range sh.hashmap {
-		if int(offset)+entryHeaderSize > len(sh.data) {
-			delete(sh.hashmap, keyHash)
+	for keyHash, offset := range oldHashmap {
+		if int(offset)+entryHeaderSize > oldDataLen {
 			continue
 		}
 
-		keyLen := binary.LittleEndian.Uint32(sh.data[offset : offset+4])
+		keyLen := binary.LittleEndian.Uint32(oldData[offset : offset+4])
 		if keyLen == 0 {
 			// Deleted entry
-			delete(sh.hashmap, keyHash)
 			continue
 		}
 
-		valueLen := binary.LittleEndian.Uint32(sh.data[offset+4 : offset+8])
+		valueLen := binary.LittleEndian.Uint32(oldData[offset+4 : offset+8])
 		entrySize := entryHeaderSize + int(keyLen) + int(valueLen)
 
+		if int(offset)+entrySize > oldDataLen {
+			continue
+		}
+
 		// Copy entry to new location
-		copy(newData[newTail:], sh.data[offset:int(offset)+entrySize])
-		sh.hashmap[keyHash] = uint32(newTail)
+		copy(newData[newTail:], oldData[offset:int(offset)+entrySize])
+		newHashmap[keyHash] = uint32(newTail)
 		newTail += entrySize
 	}
 
 	sh.data = newData
+	sh.hashmap = newHashmap
 	sh.tail = newTail
 	sh.deleted = 0
 }
