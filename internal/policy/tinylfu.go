@@ -10,8 +10,8 @@ import (
 type TinyLFU struct {
 	freq    *cmSketch
 	door    *bloomFilter
-	incrs   int64     // Number of increments
-	resetAt int64     // Reset threshold
+	incrs   int64 // Number of increments
+	resetAt int64 // Reset threshold
 	mu      sync.Mutex
 }
 

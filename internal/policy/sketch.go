@@ -17,10 +17,10 @@ const (
 // cmSketch is a Count-Min Sketch for frequency estimation.
 // Uses 4-bit counters (0-15) packed into bytes.
 type cmSketch struct {
-	rows   [cmDepth][]byte
-	seeds  [cmDepth]uint64
-	mu     sync.RWMutex
-	width  uint64
+	rows  [cmDepth][]byte
+	seeds [cmDepth]uint64
+	mu    sync.RWMutex
+	width uint64
 }
 
 // newCMSketch creates a new Count-Min Sketch with the given width.

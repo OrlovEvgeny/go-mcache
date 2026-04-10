@@ -182,7 +182,7 @@ func TestPolicyLockFree(t *testing.T) {
 }
 
 func TestPolicyLockFreeConcurrentAccess(t *testing.T) {
-	p := NewPolicyLockFree[uint64](1 << 16, 0, 0)
+	p := NewPolicyLockFree[uint64](1<<16, 0, 0)
 	const numGoroutines = 16
 	const numOps = 10000
 

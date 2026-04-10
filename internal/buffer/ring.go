@@ -131,6 +131,18 @@ type WriteBuffer[T any] struct {
 	syncCh    chan chan struct{} // For synchronous flush requests
 }
 
+// LossyBuffer provides batched best-effort buffering.
+// Items may be dropped when the ring is full to preserve caller throughput.
+type LossyBuffer[T any] struct {
+	ring      *RingBuffer[T]
+	flushFn   func([]T)
+	batchSize int
+	flushCh   chan struct{}
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+	syncCh    chan chan struct{}
+}
+
 // NewWriteBuffer creates a new write buffer with automatic flushing.
 // flushFn is called with a batch of items when the buffer is flushed.
 // batchSize is the maximum number of items to accumulate before flushing.
@@ -148,6 +160,22 @@ func NewWriteBuffer[T any](capacity int, batchSize int, flushInterval time.Durat
 
 	go wb.flushLoop(flushInterval)
 	return wb
+}
+
+// NewLossyBuffer creates a best-effort buffer that drops items when full.
+func NewLossyBuffer[T any](capacity int, batchSize int, flushInterval time.Duration, flushFn func([]T)) *LossyBuffer[T] {
+	lb := &LossyBuffer[T]{
+		ring:      NewRingBuffer[T](capacity),
+		flushFn:   flushFn,
+		batchSize: batchSize,
+		flushCh:   make(chan struct{}, 1),
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
+		syncCh:    make(chan chan struct{}, 8),
+	}
+
+	go lb.flushLoop(flushInterval)
+	return lb
 }
 
 // Push adds an item to the write buffer.
@@ -254,4 +282,83 @@ func (wb *WriteBuffer[T]) Close() {
 // Len returns the current number of pending items.
 func (wb *WriteBuffer[T]) Len() int {
 	return wb.ring.Len()
+}
+
+// Push adds an item to the lossy buffer.
+// Returns false when the buffer is full and the item is dropped.
+func (lb *LossyBuffer[T]) Push(item T) bool {
+	if !lb.ring.Push(item) {
+		select {
+		case lb.flushCh <- struct{}{}:
+		default:
+		}
+		return false
+	}
+
+	if lb.ring.Len() >= lb.batchSize {
+		select {
+		case lb.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	return true
+}
+
+func (lb *LossyBuffer[T]) flushLoop(interval time.Duration) {
+	defer close(lb.doneCh)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	batch := make([]T, 0, lb.batchSize)
+
+	for {
+		select {
+		case <-lb.stopCh:
+			lb.flushBatch(&batch)
+			return
+		case <-ticker.C:
+			lb.flushBatch(&batch)
+		case <-lb.flushCh:
+			lb.flushBatch(&batch)
+		case done := <-lb.syncCh:
+			lb.flushBatch(&batch)
+			close(done)
+		}
+	}
+}
+
+func (lb *LossyBuffer[T]) flushBatch(batch *[]T) {
+	*batch = (*batch)[:0]
+
+	for {
+		item, ok := lb.ring.Pop()
+		if !ok {
+			break
+		}
+		*batch = append(*batch, item)
+		if len(*batch) >= lb.batchSize {
+			break
+		}
+	}
+
+	if len(*batch) > 0 {
+		lb.flushFn(*batch)
+	}
+}
+
+// FlushSync drains the lossy buffer before returning.
+func (lb *LossyBuffer[T]) FlushSync() {
+	done := make(chan struct{})
+	select {
+	case lb.syncCh <- done:
+		<-done
+	case <-lb.doneCh:
+	}
+}
+
+// Close flushes pending items and stops the worker.
+func (lb *LossyBuffer[T]) Close() {
+	close(lb.stopCh)
+	<-lb.doneCh
 }

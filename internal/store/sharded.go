@@ -42,14 +42,9 @@ func (e *Entry[K, V]) IsExpired() bool {
 // Optimized with cache line padding to prevent false sharing between shards.
 type shard[K comparable, V any] struct {
 	// Hot data: frequently accessed together
-	mu sync.RWMutex       // 24 bytes on 64-bit
-	m  map[K]*Entry[K, V] // 8 bytes (pointer to map header)
+	mu sync.RWMutex             // 24 bytes on 64-bit
+	m  map[K]*Entry[K, V]       // 8 bytes (pointer to map header)
 	_  [cacheLineSize - 32]byte // Pad to cache line boundary
-
-	// Statistics on separate cache line to avoid contention
-	hits   atomic.Uint64
-	misses atomic.Uint64
-	_      [cacheLineSize - 16]byte // Pad statistics to separate cache line
 }
 
 // ShardedStore is a sharded in-memory store.
@@ -155,17 +150,14 @@ func (s *ShardedStore[K, V]) Get(key K) (*Entry[K, V], bool) {
 	sh.mu.RUnlock()
 
 	if !exists {
-		sh.misses.Add(1)
 		return nil, false
 	}
 
 	// Check expiration
 	if entry.ExpireAt > 0 && clock.NowNano() > entry.ExpireAt {
-		sh.misses.Add(1)
 		return nil, false
 	}
 
-	sh.hits.Add(1)
 	return entry, true
 }
 
@@ -181,18 +173,27 @@ func (s *ShardedStore[K, V]) GetByHash(key K, keyHash uint64) (*Entry[K, V], boo
 	sh.mu.RUnlock()
 
 	if !exists {
-		sh.misses.Add(1)
 		return nil, false
 	}
 
 	// Check expiration
 	if entry.ExpireAt > 0 && clock.NowNano() > entry.ExpireAt {
-		sh.misses.Add(1)
 		return nil, false
 	}
 
-	sh.hits.Add(1)
 	return entry, true
+}
+
+// PeekByHash retrieves an entry by key when hash is already known without
+// applying expiration checks or statistics updates.
+func (s *ShardedStore[K, V]) PeekByHash(key K, keyHash uint64) (*Entry[K, V], bool) {
+	sh := s.getShard(keyHash)
+
+	sh.mu.RLock()
+	entry, exists := sh.m[key]
+	sh.mu.RUnlock()
+
+	return entry, exists
 }
 
 // Set stores an entry.
@@ -252,6 +253,39 @@ func (s *ShardedStore[K, V]) DeleteByHash(key K, keyHash uint64) *Entry[K, V] {
 	}
 
 	return entry
+}
+
+// UpdateExistingByHash updates an existing entry in-place.
+// Returns the previous entry snapshot only when capturePrevious is true.
+func (s *ShardedStore[K, V]) UpdateExistingByHash(
+	key K,
+	keyHash uint64,
+	value V,
+	cost int64,
+	expireAt int64,
+	capturePrevious bool,
+) (prev *Entry[K, V], updated bool, costDelta int64, oldExpireAt int64) {
+	sh := s.getShard(keyHash)
+
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+
+	entry, exists := sh.m[key]
+	if !exists {
+		return nil, false, 0, 0
+	}
+
+	if capturePrevious {
+		snapshot := *entry
+		prev = &snapshot
+	}
+
+	oldExpireAt = entry.ExpireAt
+	costDelta = cost - entry.Cost
+	entry.Value = value
+	entry.Cost = cost
+	entry.ExpireAt = expireAt
+	return prev, true, costDelta, oldExpireAt
 }
 
 // Has checks if a key exists and is not expired.
@@ -414,6 +448,26 @@ func (s *ShardedStore[K, V]) CollectExpired(now int64) []*Entry[K, V] {
 	return expired
 }
 
+// DeleteIfExpired deletes an entry only if the current expiration matches
+// the scheduled one and the entry is expired at now.
+func (s *ShardedStore[K, V]) DeleteIfExpired(key K, keyHash uint64, expireAt int64, now int64) *Entry[K, V] {
+	sh := s.getShard(keyHash)
+
+	sh.mu.Lock()
+	entry, exists := sh.m[key]
+	if exists && entry.ExpireAt == expireAt && entry.ExpireAt > 0 && now > entry.ExpireAt {
+		delete(sh.m, key)
+	} else {
+		entry = nil
+	}
+	sh.mu.Unlock()
+
+	if entry != nil {
+		s.size.Add(-1)
+	}
+	return entry
+}
+
 // BatchRequest represents a batch get request.
 type BatchRequest[K comparable, V any] struct {
 	Keys    []K
@@ -467,7 +521,6 @@ func (s *ShardedStore[K, V]) GetBatch(req *BatchRequest[K, V]) {
 		if !exists {
 			req.Results[i] = nil
 			req.Found[i] = false
-			sh.misses.Add(1)
 			continue
 		}
 
@@ -475,13 +528,11 @@ func (s *ShardedStore[K, V]) GetBatch(req *BatchRequest[K, V]) {
 		if entry.ExpireAt > 0 && now > entry.ExpireAt {
 			req.Results[i] = nil
 			req.Found[i] = false
-			sh.misses.Add(1)
 			continue
 		}
 
 		req.Results[i] = entry
 		req.Found[i] = true
-		sh.hits.Add(1)
 	}
 }
 
@@ -548,20 +599,17 @@ func (s *ShardedStore[K, V]) GetBatchByShardOrder(keys []K) ([]*Entry[K, V], []b
 		if !exists {
 			results[origIdx] = nil
 			found[origIdx] = false
-			sh.misses.Add(1)
 			continue
 		}
 
 		if entry.ExpireAt > 0 && now > entry.ExpireAt {
 			results[origIdx] = nil
 			found[origIdx] = false
-			sh.misses.Add(1)
 			continue
 		}
 
 		results[origIdx] = entry
 		found[origIdx] = true
-		sh.hits.Add(1)
 	}
 
 	return results, found
@@ -569,26 +617,15 @@ func (s *ShardedStore[K, V]) GetBatchByShardOrder(keys []K) ([]*Entry[K, V], []b
 
 // ShardStats returns hit/miss statistics for a shard.
 func (s *ShardedStore[K, V]) ShardStats(shardIdx int) (hits, misses uint64) {
-	if shardIdx < 0 || shardIdx >= len(s.shards) {
-		return 0, 0
-	}
-	sh := s.shards[shardIdx]
-	return sh.hits.Load(), sh.misses.Load()
+	_ = shardIdx
+	return 0, 0
 }
 
 // TotalStats returns aggregate hit/miss statistics across all shards.
 func (s *ShardedStore[K, V]) TotalStats() (hits, misses uint64) {
-	for _, sh := range s.shards {
-		hits += sh.hits.Load()
-		misses += sh.misses.Load()
-	}
 	return hits, misses
 }
 
 // ResetStats resets all shard statistics.
 func (s *ShardedStore[K, V]) ResetStats() {
-	for _, sh := range s.shards {
-		sh.hits.Store(0)
-		sh.misses.Store(0)
-	}
 }

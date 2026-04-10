@@ -253,7 +253,9 @@ func TestCachePatternMatch(t *testing.T) {
 }
 
 func TestCacheMetrics(t *testing.T) {
-	c := NewCache[string, int]()
+	c := NewCache[string, int](
+		WithMetrics[string, int](true),
+	)
 	defer c.Close()
 
 	// Generate some hits and misses
@@ -798,6 +800,7 @@ func TestCacheCustomKeyType(t *testing.T) {
 func TestCacheEvictionMetrics(t *testing.T) {
 	c := NewCache[string, int](
 		WithMaxEntries[string, int](5),
+		WithMetrics[string, int](true),
 	)
 	defer c.Close()
 
@@ -816,7 +819,9 @@ func TestCacheEvictionMetrics(t *testing.T) {
 }
 
 func TestCacheExpirationMetrics(t *testing.T) {
-	c := NewCache[string, int]()
+	c := NewCache[string, int](
+		WithMetrics[string, int](true),
+	)
 	defer c.Close()
 
 	c.Set("exp1", 1, 30*time.Millisecond)
@@ -837,6 +842,7 @@ func TestCacheExpirationMetrics(t *testing.T) {
 func TestCacheClear(t *testing.T) {
 	c := NewCache[string, int](
 		WithPrefixSearch[string, int](true),
+		WithMetrics[string, int](true),
 	)
 	defer c.Close()
 
