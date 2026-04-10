@@ -255,7 +255,9 @@ func (s *ShardedStore[K, V]) DeleteByHash(key K, keyHash uint64) *Entry[K, V] {
 	return entry
 }
 
-// UpdateExistingByHash updates an existing entry in-place.
+// UpdateExistingByHash replaces an existing entry with a fresh snapshot.
+// Stored entries are treated as immutable after publication so readers can
+// safely access them after releasing the shard read lock.
 // Returns the previous entry snapshot only when capturePrevious is true.
 func (s *ShardedStore[K, V]) UpdateExistingByHash(
 	key K,
@@ -282,9 +284,13 @@ func (s *ShardedStore[K, V]) UpdateExistingByHash(
 
 	oldExpireAt = entry.ExpireAt
 	costDelta = cost - entry.Cost
-	entry.Value = value
-	entry.Cost = cost
-	entry.ExpireAt = expireAt
+	sh.m[key] = &Entry[K, V]{
+		Key:      entry.Key,
+		Value:    value,
+		KeyHash:  entry.KeyHash,
+		ExpireAt: expireAt,
+		Cost:     cost,
+	}
 	return prev, true, costDelta, oldExpireAt
 }
 
