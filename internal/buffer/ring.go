@@ -219,16 +219,16 @@ func (wb *WriteBuffer[T]) flushLoop(interval time.Duration) {
 	for {
 		select {
 		case <-wb.stopCh:
-			// Final flush
-			wb.flushBatch(&batch)
+			// Final flush must drain the entire ring before returning.
+			wb.flushAll(&batch)
 			return
 		case <-ticker.C:
 			wb.flushBatch(&batch)
 		case <-wb.flushCh:
 			wb.flushBatch(&batch)
 		case done := <-wb.syncCh:
-			// Synchronous flush: drain buffer then signal completion
-			wb.flushBatch(&batch)
+			// Synchronous flush must drain the entire ring before completion.
+			wb.flushAll(&batch)
 			close(done)
 		}
 	}
@@ -251,6 +251,16 @@ func (wb *WriteBuffer[T]) flushBatch(batch *[]T) {
 
 	if len(*batch) > 0 {
 		wb.flushFn(*batch)
+	}
+}
+
+// flushAll drains the ring completely, emitting as many batches as needed.
+func (wb *WriteBuffer[T]) flushAll(batch *[]T) {
+	for {
+		wb.flushBatch(batch)
+		if wb.ring.IsEmpty() {
+			return
+		}
 	}
 }
 
@@ -315,14 +325,14 @@ func (lb *LossyBuffer[T]) flushLoop(interval time.Duration) {
 	for {
 		select {
 		case <-lb.stopCh:
-			lb.flushBatch(&batch)
+			lb.flushAll(&batch)
 			return
 		case <-ticker.C:
 			lb.flushBatch(&batch)
 		case <-lb.flushCh:
 			lb.flushBatch(&batch)
 		case done := <-lb.syncCh:
-			lb.flushBatch(&batch)
+			lb.flushAll(&batch)
 			close(done)
 		}
 	}
@@ -344,6 +354,15 @@ func (lb *LossyBuffer[T]) flushBatch(batch *[]T) {
 
 	if len(*batch) > 0 {
 		lb.flushFn(*batch)
+	}
+}
+
+func (lb *LossyBuffer[T]) flushAll(batch *[]T) {
+	for {
+		lb.flushBatch(batch)
+		if lb.ring.IsEmpty() {
+			return
+		}
 	}
 }
 

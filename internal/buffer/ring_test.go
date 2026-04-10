@@ -231,6 +231,30 @@ func TestWriteBufferClose(t *testing.T) {
 	}
 }
 
+func TestWriteBufferFlushSyncDrainsAll(t *testing.T) {
+	var flushed atomic.Int32
+
+	wb := NewWriteBuffer[int](256, 64, time.Hour, func(batch []int) {
+		flushed.Add(int32(len(batch)))
+	})
+	defer wb.Close()
+
+	for i := 0; i < 100; i++ {
+		if !wb.Push(i) {
+			t.Fatalf("Push(%d) failed", i)
+		}
+	}
+
+	wb.FlushSync()
+
+	if flushed.Load() != 100 {
+		t.Fatalf("Expected FlushSync to drain 100 items, got %d", flushed.Load())
+	}
+	if wb.Len() != 0 {
+		t.Fatalf("Expected empty buffer after FlushSync, got %d pending items", wb.Len())
+	}
+}
+
 func BenchmarkRingBufferPush(b *testing.B) {
 	rb := NewRingBuffer[int](1024)
 
