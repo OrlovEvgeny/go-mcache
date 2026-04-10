@@ -105,7 +105,7 @@ func TestPatternMatch(t *testing.T) {
 		{"user:*:name", "user:123:name", true},
 		{"user:*:name", "user::name", true},
 		{"user:*:name", "user:name", false},
-		{"[a-z]*[0-9]", "abc123", true},  // ends with 3, which is in [0-9]
+		{"[a-z]*[0-9]", "abc123", true}, // ends with 3, which is in [0-9]
 		{"[a-z]*[0-9]", "a1", true},
 		{"*.txt", "file.txt", true},
 		{"*.txt", "file.tar.txt", true},

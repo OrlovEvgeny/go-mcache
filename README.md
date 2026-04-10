@@ -5,7 +5,7 @@
 [![Tests](https://github.com/OrlovEvgeny/go-mcache/actions/workflows/test.yml/badge.svg)](https://github.com/OrlovEvgeny/go-mcache/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/OrlovEvgeny/go-mcache)](https://github.com/OrlovEvgeny/go-mcache/releases/latest)
 
-Generic in-memory cache for Go with TinyLFU admission, sharded storage, and lock-free read path.
+Generic in-memory cache for Go with TinyLFU admission, sharded storage, batched read tracking, and a timing-wheel expiration path.
 
 ## Design
 
@@ -13,7 +13,7 @@ mcache combines two ideas to achieve both high hit ratios and high throughput:
 
 **Admission control via TinyLFU.** Not every new item gets into the cache. On insertion, a Count-Min Sketch estimates the access frequency of the incoming item and compares it against a random sample of existing entries (SampledLFU). If the new item has lower frequency, it is rejected. This prevents one-time keys from evicting frequently accessed data — a problem that LRU caches have by design. The frequency sketch uses 4-bit counters (8 bytes per ~16 tracked keys) and resets periodically to adapt to changing access patterns.
 
-**Lock-free read path.** The TinyLFU frequency tracking (Count-Min Sketch + Bloom filter doorkeeper) is implemented with atomic operations — no mutexes on reads. The storage layer uses 1024 shards with per-shard `sync.RWMutex` and cache-line padding between shards to eliminate false sharing. As a result, read throughput scales linearly with cores.
+**Cheap read path.** Reads always go through a sharded map lookup. Frequency tracking is updated in a best-effort batched buffer once the cache becomes meaningfully occupied, which avoids paying TinyLFU bookkeeping on every hot read while the cache is still far from capacity.
 
 ### Architecture
 
@@ -24,10 +24,11 @@ Cache[K, V]
 ├── Policy[K]            generic over key type (no hash-collision ambiguity)
 │   ├── TinyLFU          doorkeeper (Bloom filter) + Count-Min Sketch
 │   └── SampledLFU[K]    dense array + map for O(1) random sampling
-├── ExpiryHeap           min-heap for TTL-based expiration, O(log n) ops
+├── ExpiryWheel          coarse timing wheel for best-effort background expiry
 ├── RadixTree            opt-in, for prefix search on string keys
 ├── WriteBuffer          lock-free ring buffer for async batching
-└── Metrics              atomic counters, zero-cost when not read
+├── ReadBuffer           lossy batched policy-access replay
+└── Metrics              optional atomic counters
 ```
 
 ### Why exact-key policy matters
@@ -39,7 +40,7 @@ The policy tracks entries by exact key `K`, not by hash. This means:
 
 ### Expiration
 
-Entries with TTL are tracked in a min-heap. A background goroutine sweeps expired entries once per second using a shard-local collect-and-delete: each shard is locked once for the entire sweep, expired entries are removed in bulk, and policy/radix/callback updates happen outside the shard lock.
+Entries with TTL are scheduled into a coarse timing wheel for best-effort background cleanup. Exact TTL enforcement still happens on `Get`/`Has` by checking the entry's `ExpireAt`, while the background worker lazily removes entries whose scheduled expiration still matches the live entry.
 
 ## Install
 
@@ -129,6 +130,8 @@ When the write buffer is full, the operation falls back to synchronous execution
 | `WithNumCounters` | TinyLFU counters (recommend 10x max entries) | auto |
 | `WithShardCount` | Number of shards (power of 2) | 1024 |
 | `WithBufferItems` | Async write buffer size (0 = sync) | 0 |
+| `WithMetrics` | Enable cache metrics collection | true |
+| `WithExpirationResolution` | Background expiration tick resolution | 100ms |
 | `WithDefaultTTL` | Default TTL for entries without explicit TTL | 0 (no expiry) |
 | `WithCostFunc` | Custom cost calculator | cost = 1 |
 | `WithKeyHasher` | Custom key hash function | auto (FNV-1a) |
@@ -187,39 +190,59 @@ cache.Metrics() MetricsSnapshot
 
 ## Benchmarks
 
-Apple M4 Pro, Go 1.23. Run with `go test -bench=. -benchmem`.
+The repo includes a cross-library comparison suite for local in-process caches:
+`go-mcache`, `ristretto`, `bigcache`, `freecache`, `go-cache`, `ttlcache`,
+`golang-lru/expirable`, `otter`, and `theine`.
 
-```
-BenchmarkCacheGet                  4,915,591     445.9 ns/op     0 B/op    0 allocs/op
-BenchmarkCacheSet                  2,185,386    1061   ns/op    49 B/op    1 allocs/op
-BenchmarkCacheSetWithTTL           2,511,756     973.9 ns/op    49 B/op    1 allocs/op
-BenchmarkCacheMixed                4,878,026     473.3 ns/op     9 B/op    0 allocs/op
-BenchmarkCacheHas                137,653,788      17.5 ns/op     0 B/op    0 allocs/op
-BenchmarkCacheOperations/Read     40,523,341      58.0 ns/op     5 B/op    0 allocs/op
-BenchmarkCacheZipf                   683,647    3624   ns/op    13 B/op    0 allocs/op
-```
+Run the same suite used for the numbers below:
 
-`CacheGet` includes TinyLFU frequency tracking on every access. `CacheHas` is a pure shard lookup without policy update. The difference (~17 ns vs ~446 ns) shows the cost of the admission policy — which is the tradeoff for better hit ratios on skewed workloads (`CacheZipf` achieves 87.4% hit rate).
-
-Lock-free internals:
-
-```
-BenchmarkCMSketchLockFreeIncrement            58,410,620    20.8 ns/op    0 B/op
-BenchmarkCMSketchLockFreeIncrementParallel    43,926,879    24.5 ns/op    0 B/op
-BenchmarkBloomFilterLockFreeAddParallel      889,117,638     1.3 ns/op    0 B/op
-BenchmarkPolicyLockFreeAccess                 35,165,865    36.3 ns/op    0 B/op
+```bash
+env GOCACHE=/tmp/go-build-cache GOTOOLCHAIN=auto \
+go test -run '^$' -bench '^BenchmarkCompare/' -benchmem -benchtime=1s -count=3 .
 ```
 
-Parallel CM Sketch throughput degrades only ~18% from single-goroutine, showing the lock-free design scales under contention.
+Current reference run:
+- machine: `Apple M4 Pro`
+- metric shown in tables: median `ns/op` across `count=3` runs (`lower is better`)
+
+The suite separates:
+- core throughput (`ReadParallelHot`, `WriteParallelOverwrite`, `MixedParallel80_20`, `DeleteCycle`)
+- TTL overhead (`SetWithTTLParallel`, `ExpiredRead` for precise TTL implementations)
+- bounded-cache pressure (`MixedParallelZipf95_5`, `MissThenSetZipf`)
+
+These numbers are useful as a comparative signal for this repository, but they
+are still microbenchmarks on one machine. They should not be read as a universal
+"best cache for every workload" claim.
+
+Core scenarios:
+
+| Scenario | `go-mcache` | `ristretto` | `bigcache` | `freecache` | `go-cache` | `ttlcache` | `golang-lru-expirable` | `otter` | `theine` |
+|---|---|---|---|---|---|---|---|---|---|
+| Core/ReadParallelHot | 8.598 | 14.640 | 51.220 | 52.180 | 120.700 | 408.300 | 319.300 | 4.919 | 8.412 |
+| Core/WriteParallelOverwrite | 21.600 | 238.000 | 50.130 | 52.840 | 227.900 | 365.100 | 320.500 | 393.600 | 284.500 |
+| Core/MixedParallel80_20 | 15.040 | 75.300 | 38.090 | 51.160 | 49.070 | 401.000 | 340.900 | 85.120 | 92.620 |
+| Core/DeleteCycle | 148.500 | 241.700 | 62.730 | 39.670 | 36.910 | 78.370 | 85.140 | 129.500 | 197.400 |
+
+TTL and bounded scenarios:
+
+| Scenario | `go-mcache` | `ristretto` | `bigcache` | `freecache` | `go-cache` | `ttlcache` | `golang-lru-expirable` | `otter` | `theine` |
+|---|---|---|---|---|---|---|---|---|---|
+| TTL/SetWithTTLParallel | 237.000 | 507.300 | 59.800 | 53.430 | 271.900 | 261.900 | 298.600 | 401.600 | 339.300 |
+| TTL/ExpiredRead | 7.032 | 20.850 | — | — | 158.100 | 350.100 | 100.900 | 3.635 | 11.010 |
+| Bounded/MixedParallelZipf95_5 | 37.430 | 64.920 | 86.130 | 122.200 | — | 320.700 | 263.100 | 21.790 | 49.720 |
+| Bounded/MissThenSetZipf | 22.440 | 26.600 | 54.650 | 120.700 | — | 324.400 | 262.100 | 6.258 | 9.766 |
+
+`—` means the scenario is not part of that library's comparison set in this suite
+(for example, `ExpiredRead` is only run for caches with precise TTL semantics).
 
 ## Thread safety
 
 All operations are safe for concurrent use. The concurrency model:
 
-- **Reads**: shard RLock + lock-free TinyLFU access → no global contention
-- **Writes**: shard Lock + policy mutex (held only during eviction decision)
-- **Expiration**: shard-local sweep under write lock, policy/callback updates outside lock
-- **Metrics**: atomic counters, no locks
+- **Reads**: shard `RLock` + optional best-effort read buffering for policy replay
+- **Writes**: overwrite fast path updates entries in-place when possible; inserts go through admission/eviction
+- **Expiration**: timing-wheel scheduling on writes, lazy delete on background ticks
+- **Metrics**: atomic counters when enabled
 - **Shards**: cache-line padded to prevent false sharing between cores
 
 ## Legacy API

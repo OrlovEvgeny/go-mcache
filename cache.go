@@ -29,17 +29,19 @@ type Item[K comparable, V any] struct {
 type Cache[K comparable, V any] struct {
 	store       *store.ShardedStore[K, V]
 	policy      policy.Policer[K]
-	expiryHeap  *store.ExpiryHeap // Min-heap for efficient expiration tracking
-	radixTree   *radix.Tree       // Only for string keys
+	expiryWheel *store.ExpiryWheel[K]
+	radixTree   *radix.Tree // Only for string keys
 	metrics     *Metrics
 	config      *config[K, V]
 	writeBuffer *buffer.WriteBuffer[writeItem[K, V]]
+	readBuffer  *buffer.LossyBuffer[uint64]
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	closed atomic.Bool
-	clearMu sync.Mutex // Serializes Clear() with removeExpired()
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	closed   atomic.Bool
+	clearMu  sync.Mutex // Serializes Clear() with removeExpired()
+	liveCost atomic.Int64
 
 	// For string key prefix/pattern operations
 	isStringKey bool
@@ -78,13 +80,15 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 	}
 
 	c := &Cache[K, V]{
-		store:      store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
-		policy:     pol,
-		expiryHeap: store.NewExpiryHeap(1024), // Initial capacity for expiration tracking
-		metrics:    newMetrics(),
-		config:     cfg,
-		ctx:        ctx,
-		cancel:     cancel,
+		store:       store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
+		policy:      pol,
+		expiryWheel: store.NewExpiryWheel[K](cfg.ExpiryResolution),
+		config:      cfg,
+		ctx:         ctx,
+		cancel:      cancel,
+	}
+	if cfg.MetricsEnabled {
+		c.metrics = newMetrics()
 	}
 
 	// Check if K is string for prefix search support
@@ -104,6 +108,14 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 			int(cfg.BufferItems),
 			10*time.Microsecond,
 			c.processWriteBatch,
+		)
+	}
+	if cfg.MaxEntries > 0 || cfg.MaxCost > 0 {
+		c.readBuffer = buffer.NewLossyBuffer[uint64](
+			1024,
+			64,
+			50*time.Microsecond,
+			c.processReadBatch,
 		)
 	}
 
@@ -130,8 +142,7 @@ func (c *Cache[K, V]) Get(key K) (V, bool) {
 		return zero, false
 	}
 
-	// Update frequency in policy
-	c.policy.Access(keyHash)
+	c.recordAccess(keyHash)
 	c.metrics.incHit()
 
 	return entry.Value, true
@@ -171,6 +182,30 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 
 	keyHash := c.store.KeyHash(key)
 
+	if c.writeBuffer != nil {
+		entry := &store.Entry[K, V]{
+			Key:      key,
+			Value:    value,
+			KeyHash:  keyHash,
+			ExpireAt: expireAt,
+			Cost:     cost,
+		}
+		// Buffered write with synchronous fallback on buffer saturation
+		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true}) {
+			c.metrics.incBufferDrop()
+			return c.setSync(key, value, keyHash, cost, expireAt)
+		}
+		return true
+	}
+
+	return c.setSync(key, value, keyHash, cost, expireAt)
+}
+
+func (c *Cache[K, V]) setSync(key K, value V, keyHash uint64, cost int64, expireAt int64) bool {
+	if c.tryUpdateExisting(key, value, keyHash, cost, expireAt) {
+		return true
+	}
+
 	entry := &store.Entry[K, V]{
 		Key:      key,
 		Value:    value,
@@ -178,20 +213,10 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 		ExpireAt: expireAt,
 		Cost:     cost,
 	}
-
-	if c.writeBuffer != nil {
-		// Buffered write with synchronous fallback on buffer saturation
-		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true}) {
-			c.metrics.incBufferDrop()
-			return c.doSet(entry)
-		}
-		return true
-	}
-
 	return c.doSet(entry)
 }
 
-// doSet performs the actual set operation.
+// doSet performs the actual set operation for new entries.
 func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
 	// Check admission policy and get victims to evict
 	victims, added := c.policy.Add(entry.Key, entry.KeyHash, entry.Cost)
@@ -210,10 +235,11 @@ func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
 
 	// Store the entry
 	prev := c.store.Set(entry)
+	c.liveCost.Add(entry.Cost)
 
-	// Add to expiry heap if entry has expiration
+	// Schedule background expiration if entry has TTL.
 	if entry.ExpireAt > 0 {
-		c.expiryHeap.Push(entry.KeyHash, entry.ExpireAt)
+		c.expiryWheel.Schedule(entry.Key, entry.KeyHash, entry.ExpireAt)
 	}
 
 	// Update radix tree for string keys
@@ -242,9 +268,7 @@ func (c *Cache[K, V]) evictVictim(victim policy.Victim[K]) {
 	if deleted == nil {
 		return
 	}
-
-	// Remove from expiry heap
-	c.expiryHeap.Remove(victim.KeyHash)
+	c.liveCost.Add(-deleted.Cost)
 
 	// Remove from radix tree
 	if c.isStringKey && c.radixTree != nil {
@@ -290,12 +314,10 @@ func (c *Cache[K, V]) doDelete(key K, keyHash uint64) bool {
 	if deleted == nil {
 		return false
 	}
+	c.liveCost.Add(-deleted.Cost)
 
 	// Remove from policy
 	c.policy.Del(key, keyHash)
-
-	// Remove from expiry heap
-	c.expiryHeap.Remove(keyHash)
 
 	// Remove from radix tree
 	if c.isStringKey && c.radixTree != nil {
@@ -372,7 +394,7 @@ func (c *Cache[K, V]) GetBatch(keys []K) *BatchResult[K, V] {
 		if req.Found[i] {
 			result.Values[i] = req.Results[i].Value
 			result.Found[i] = true
-			c.policy.Access(result.Hashes[i])
+			c.recordAccess(result.Hashes[i])
 			c.metrics.incHit()
 		} else {
 			c.metrics.incMiss()
@@ -415,7 +437,7 @@ func (c *Cache[K, V]) GetBatchOptimized(keys []K) *BatchResult[K, V] {
 		if found[i] && entries[i] != nil {
 			result.Values[i] = entries[i].Value
 			result.Found[i] = true
-			c.policy.Access(result.Hashes[i])
+			c.recordAccess(result.Hashes[i])
 			c.metrics.incHit()
 		} else {
 			c.metrics.incMiss()
@@ -466,6 +488,9 @@ func (c *Cache[K, V]) DeleteMany(keys []K) int {
 func (c *Cache[K, V]) Wait() {
 	if c.writeBuffer != nil {
 		c.writeBuffer.FlushSync()
+	}
+	if c.readBuffer != nil {
+		c.readBuffer.FlushSync()
 	}
 }
 
@@ -518,11 +543,12 @@ func (c *Cache[K, V]) Clear() {
 	defer c.clearMu.Unlock()
 	c.store.Clear()
 	c.policy.Clear()
-	c.expiryHeap.Clear()
+	c.expiryWheel.Clear()
 	if c.radixTree != nil {
 		c.radixTree.Clear()
 	}
 	c.metrics.Reset()
+	c.liveCost.Store(0)
 }
 
 // Close stops the cache and releases resources.
@@ -536,6 +562,9 @@ func (c *Cache[K, V]) Close() {
 	if c.writeBuffer != nil {
 		c.writeBuffer.Close()
 	}
+	if c.readBuffer != nil {
+		c.readBuffer.Close()
+	}
 
 	c.wg.Wait()
 }
@@ -544,10 +573,24 @@ func (c *Cache[K, V]) Close() {
 func (c *Cache[K, V]) processWriteBatch(items []writeItem[K, V]) {
 	for _, item := range items {
 		if item.isSet {
-			c.doSet(item.entry)
+			c.setSync(item.entry.Key, item.entry.Value, item.entry.KeyHash, item.entry.Cost, item.entry.ExpireAt)
 		} else {
 			c.doDelete(item.entry.Key, item.entry.KeyHash)
 		}
+	}
+}
+
+// processReadBatch replays access events in batches.
+func (c *Cache[K, V]) processReadBatch(items []uint64) {
+	if len(items) == 0 {
+		return
+	}
+	if batcher, ok := c.policy.(interface{ AccessBatch([]uint64) }); ok {
+		batcher.AccessBatch(items)
+		return
+	}
+	for _, keyHash := range items {
+		c.policy.Access(keyHash)
 	}
 }
 
@@ -555,7 +598,7 @@ func (c *Cache[K, V]) processWriteBatch(items []writeItem[K, V]) {
 func (c *Cache[K, V]) expirationWorker() {
 	defer c.wg.Done()
 
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(c.expiryWheel.Resolution())
 	defer ticker.Stop()
 
 	for {
@@ -568,23 +611,25 @@ func (c *Cache[K, V]) expirationWorker() {
 	}
 }
 
-// removeExpired removes all expired entries using shard-local sweep.
-// Collects expired entries atomically per shard, then updates policy/heap/radix outside shard locks.
+// removeExpired drains the timing wheel and deletes entries lazily if their
+// stored expiration still matches the scheduled one.
 func (c *Cache[K, V]) removeExpired() {
 	c.clearMu.Lock()
 	defer c.clearMu.Unlock()
 
 	now := clock.NowNano()
+	expired := c.expiryWheel.Advance(now)
 
-	// Shard-local sweep: single lock per shard, not per entry
-	expired := c.store.CollectExpired(now)
-
-	for _, entry := range expired {
+	for _, item := range expired {
+		entry := c.store.DeleteIfExpired(item.Key, item.KeyHash, item.ExpireAt, now)
+		if entry == nil {
+			continue
+		}
+		c.liveCost.Add(-entry.Cost)
 		c.policy.Del(entry.Key, entry.KeyHash)
-		c.expiryHeap.Remove(entry.KeyHash)
 
 		if c.isStringKey && c.radixTree != nil {
-			if strKey, ok := any(entry.Key).(string); ok {
+			if strKey, ok := any(item.Key).(string); ok {
 				c.radixTree.Delete(strKey)
 			}
 		}
@@ -595,6 +640,65 @@ func (c *Cache[K, V]) removeExpired() {
 			c.config.OnExpire(entry.Key, entry.Value)
 		}
 	}
+}
+
+func (c *Cache[K, V]) recordAccess(keyHash uint64) {
+	if !c.shouldTrackAccess() {
+		return
+	}
+	if c.readBuffer != nil {
+		c.readBuffer.Push(keyHash)
+		return
+	}
+	c.policy.Access(keyHash)
+}
+
+func (c *Cache[K, V]) shouldTrackAccess() bool {
+	if c.config.MaxEntries <= 0 && c.config.MaxCost <= 0 {
+		return false
+	}
+	if c.config.MaxEntries > 0 && int64(c.store.Len()) >= c.config.MaxEntries/2 {
+		return true
+	}
+	if c.config.MaxCost > 0 && c.liveCost.Load() >= c.config.MaxCost/2 {
+		return true
+	}
+	return false
+}
+
+func (c *Cache[K, V]) tryUpdateExisting(key K, value V, keyHash uint64, cost int64, expireAt int64) bool {
+	if _, ok := c.store.PeekByHash(key, keyHash); !ok {
+		return false
+	}
+
+	prev, updated, costDelta, _ := c.store.UpdateExistingByHash(
+		key,
+		keyHash,
+		value,
+		cost,
+		expireAt,
+		c.config.OnEvict != nil,
+	)
+	if !updated {
+		return false
+	}
+
+	if costDelta != 0 {
+		c.liveCost.Add(costDelta)
+		c.policy.Update(key, keyHash, cost)
+	}
+	if expireAt > 0 {
+		c.expiryWheel.Schedule(key, keyHash, expireAt)
+	}
+
+	c.metrics.incSet()
+	c.metrics.addCost(cost)
+
+	if prev != nil && c.config.OnEvict != nil {
+		c.config.OnEvict(prev.Key, prev.Value, prev.Cost)
+	}
+
+	return true
 }
 
 // defaultKeyHasher returns the default hasher for a key type.

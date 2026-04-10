@@ -20,9 +20,9 @@ type trackedItem struct {
 // Generic over K for exact-key identity (no hash collision ambiguity).
 // Uses a dense array for O(sampleSize) random sampling.
 type SampledLFU[K comparable] struct {
-	costs    map[K]trackedItem // key -> {hash, cost}
-	keys     []K               // dense array for O(1) random access
-	keyIndex map[K]int          // key -> index in keys[]
+	costs      map[K]trackedItem // key -> {hash, cost}
+	keys       []K               // dense array for O(1) random access
+	keyIndex   map[K]int         // key -> index in keys[]
 	maxCost    int64
 	usedCost   int64
 	maxEntries int64

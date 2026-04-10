@@ -9,32 +9,32 @@ import (
 // Pattern represents a compiled glob pattern.
 type Pattern struct {
 	raw       string
-	prefix    string    // Literal prefix before first wildcard
+	prefix    string // Literal prefix before first wildcard
 	segments  []segment
-	hasDouble bool      // Contains **
+	hasDouble bool // Contains **
 }
 
 type segment struct {
-	typ      segmentType
-	literal  string
-	charset  string // For [abc] patterns
-	negated  bool   // For [^abc] patterns
+	typ     segmentType
+	literal string
+	charset string // For [abc] patterns
+	negated bool   // For [^abc] patterns
 }
 
 type segmentType int
 
 const (
-	segLiteral segmentType = iota // Exact string match
-	segStar                       // * - matches any characters except separator
-	segDouble                     // ** - matches any characters including separator
-	segQuestion                   // ? - matches single character
-	segCharset                    // [abc] - matches one character in set
+	segLiteral  segmentType = iota // Exact string match
+	segStar                        // * - matches any characters except separator
+	segDouble                      // ** - matches any characters including separator
+	segQuestion                    // ? - matches single character
+	segCharset                     // [abc] - matches one character in set
 )
 
 var (
-	ErrEmptyPattern    = errors.New("empty pattern")
-	ErrInvalidPattern  = errors.New("invalid pattern")
-	ErrUnmatchedBrace  = errors.New("unmatched bracket in pattern")
+	ErrEmptyPattern   = errors.New("empty pattern")
+	ErrInvalidPattern = errors.New("invalid pattern")
+	ErrUnmatchedBrace = errors.New("unmatched bracket in pattern")
 )
 
 // Compile compiles a glob pattern string into a Pattern.

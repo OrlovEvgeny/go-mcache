@@ -4,13 +4,13 @@ import "sync/atomic"
 
 // Metrics holds cache statistics.
 type Metrics struct {
-	hits       atomic.Int64 // Cache hits
-	misses     atomic.Int64 // Cache misses
-	sets       atomic.Int64 // Successful sets
-	deletes    atomic.Int64 // Successful deletes
-	evictions  atomic.Int64 // Evictions due to size/cost limit
+	hits        atomic.Int64 // Cache hits
+	misses      atomic.Int64 // Cache misses
+	sets        atomic.Int64 // Successful sets
+	deletes     atomic.Int64 // Successful deletes
+	evictions   atomic.Int64 // Evictions due to size/cost limit
 	expirations atomic.Int64 // Expirations due to TTL
-	rejections atomic.Int64 // Rejections by TinyLFU admission policy
+	rejections  atomic.Int64 // Rejections by TinyLFU admission policy
 	costAdded   atomic.Int64 // Total cost added
 	costEvicted atomic.Int64 // Total cost evicted
 	bufferDrops atomic.Int64 // Buffer saturation drops (sync fallback used)
@@ -38,56 +38,89 @@ func newMetrics() *Metrics {
 
 // incHit increments the hit counter.
 func (m *Metrics) incHit() {
+	if m == nil {
+		return
+	}
 	m.hits.Add(1)
 }
 
 // incMiss increments the miss counter.
 func (m *Metrics) incMiss() {
+	if m == nil {
+		return
+	}
 	m.misses.Add(1)
 }
 
 // incSet increments the set counter.
 func (m *Metrics) incSet() {
+	if m == nil {
+		return
+	}
 	m.sets.Add(1)
 }
 
 // incDelete increments the delete counter.
 func (m *Metrics) incDelete() {
+	if m == nil {
+		return
+	}
 	m.deletes.Add(1)
 }
 
 // incEviction increments the eviction counter.
 func (m *Metrics) incEviction() {
+	if m == nil {
+		return
+	}
 	m.evictions.Add(1)
 }
 
 // incExpiration increments the expiration counter.
 func (m *Metrics) incExpiration() {
+	if m == nil {
+		return
+	}
 	m.expirations.Add(1)
 }
 
 // incRejection increments the rejection counter.
 func (m *Metrics) incRejection() {
+	if m == nil {
+		return
+	}
 	m.rejections.Add(1)
 }
 
 // addCost adds to the cost added counter.
 func (m *Metrics) addCost(cost int64) {
+	if m == nil {
+		return
+	}
 	m.costAdded.Add(cost)
 }
 
 // addEvictedCost adds to the cost evicted counter.
 func (m *Metrics) addEvictedCost(cost int64) {
+	if m == nil {
+		return
+	}
 	m.costEvicted.Add(cost)
 }
 
 // incBufferDrop increments the buffer drop counter.
 func (m *Metrics) incBufferDrop() {
+	if m == nil {
+		return
+	}
 	m.bufferDrops.Add(1)
 }
 
 // Snapshot returns a point-in-time snapshot of the metrics.
 func (m *Metrics) Snapshot() MetricsSnapshot {
+	if m == nil {
+		return MetricsSnapshot{}
+	}
 	hits := m.hits.Load()
 	misses := m.misses.Load()
 	total := hits + misses
@@ -114,6 +147,9 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 
 // Reset resets all metrics to zero.
 func (m *Metrics) Reset() {
+	if m == nil {
+		return
+	}
 	m.hits.Store(0)
 	m.misses.Store(0)
 	m.sets.Store(0)

@@ -15,6 +15,10 @@ type config[K comparable, V any] struct {
 	// Buffers
 	BufferItems int64 // Write buffer size (default 64)
 
+	// Read path
+	MetricsEnabled   bool          // Enable metrics collection (default: false)
+	ExpiryResolution time.Duration // Proactive expiration resolution
+
 	// Callbacks
 	OnEvict  func(key K, value V, cost int64) // Called when entry is evicted
 	OnExpire func(key K, value V)             // Called when entry expires
@@ -50,6 +54,8 @@ func defaultConfig[K comparable, V any]() *config[K, V] {
 		NumCounters:       0,    // will be set based on MaxEntries
 		ShardCount:        1024, // 1024 shards
 		BufferItems:       0,    // No buffering by default (synchronous writes)
+		MetricsEnabled:    true,
+		ExpiryResolution:  100 * time.Millisecond,
 		UseLockFreePolicy: true, // Use lock-free policy by default for better read performance
 	}
 }
@@ -110,6 +116,14 @@ func WithBufferItems[K comparable, V any](n int64) Option[K, V] {
 	}
 }
 
+// WithMetrics enables or disables metrics collection.
+// Default: false.
+func WithMetrics[K comparable, V any](enabled bool) Option[K, V] {
+	return func(c *config[K, V]) {
+		c.MetricsEnabled = enabled
+	}
+}
+
 // WithOnEvict sets a callback function that is called when an entry is evicted.
 // The callback receives the key, value, and cost of the evicted entry.
 func WithOnEvict[K comparable, V any](fn func(K, V, int64)) Option[K, V] {
@@ -155,6 +169,17 @@ func WithKeyHasher[K comparable, V any](fn func(K) uint64) Option[K, V] {
 func WithDefaultTTL[K comparable, V any](ttl time.Duration) Option[K, V] {
 	return func(c *config[K, V]) {
 		c.DefaultTTL = ttl
+	}
+}
+
+// WithExpirationResolution sets the proactive expiration sweep resolution.
+// Expired entries are always rejected exactly on Get/Has; this option only
+// controls how quickly background cleanup observes expired items.
+func WithExpirationResolution[K comparable, V any](resolution time.Duration) Option[K, V] {
+	return func(c *config[K, V]) {
+		if resolution > 0 {
+			c.ExpiryResolution = resolution
+		}
 	}
 }
 

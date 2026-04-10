@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	defaultShardCount    = 1024
-	defaultMapPrealloc   = 256
+	defaultShardCount  = 1024
+	defaultMapPrealloc = 256
 )
 
 // shard represents a single bucket in the sharded map.
