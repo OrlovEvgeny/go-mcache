@@ -213,10 +213,34 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 	return c.setSync(entry)
 }
 
-// setSync inserts or replaces an entry under a single shard lock.
-// The admission policy distinguishes inserts from updates internally,
-// and store.Set returns the previous entry for cost reconciliation.
+// setSync inserts or replaces an entry.
+//
+// Overwrites take a fast path: a single shard lock and no admission policy
+// call — the policy's global mutex would otherwise serialize every parallel
+// overwrite. The policy only needs to know about updates when the cost
+// changed. New keys go through admission as usual.
 func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
+	if prev, updated := c.store.Update(entry); updated {
+		if costDelta := entry.Cost - prev.Cost; costDelta != 0 {
+			c.liveCost.Add(costDelta)
+			if c.policy != nil {
+				c.policy.Update(entry.Key, entry.KeyHash, entry.Cost)
+			}
+		}
+
+		if entry.ExpireAt > 0 {
+			c.expiryWheel.Schedule(entry.Key, entry.KeyHash, entry.ExpireAt)
+		}
+
+		if c.config.OnEvict != nil {
+			c.config.OnEvict(prev.Key, prev.Value, prev.Cost)
+		}
+
+		c.metrics.incSet(entry.KeyHash)
+		c.metrics.addCost(entry.KeyHash, entry.Cost)
+		return true
+	}
+
 	if c.policy != nil {
 		// Check admission policy and get victims to evict
 		victims, added := c.policy.Add(entry.Key, entry.KeyHash, entry.Cost)
@@ -234,7 +258,9 @@ func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
 		}
 	}
 
-	// Store the entry
+	// Store the entry. A concurrent writer may have inserted the same key
+	// after the Update miss above; store.Set returns the previous entry so
+	// cost is reconciled either way.
 	prev := c.store.Set(entry)
 	if prev != nil {
 		c.liveCost.Add(entry.Cost - prev.Cost)

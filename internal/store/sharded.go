@@ -154,6 +154,26 @@ func (s *ShardedStore[K, V]) GetByHash(key K, keyHash uint64) (*Entry[K, V], boo
 	return entry, true
 }
 
+// Update replaces an existing entry under a single shard lock.
+// Returns (previous entry, true) when the key existed, (nil, false) otherwise.
+// Stored entries are treated as immutable after publication, so the entry
+// pointer itself is stored — the caller must not mutate it afterwards.
+func (s *ShardedStore[K, V]) Update(entry *Entry[K, V]) (*Entry[K, V], bool) {
+	sh := s.getShard(entry.KeyHash)
+
+	sh.mu.Lock()
+	prev, exists := sh.m[entry.Key]
+	if exists {
+		sh.m[entry.Key] = entry
+	}
+	sh.mu.Unlock()
+
+	if !exists {
+		return nil, false
+	}
+	return prev, true
+}
+
 // Set stores an entry.
 // Returns the previous entry if it existed, nil otherwise.
 func (s *ShardedStore[K, V]) Set(entry *Entry[K, V]) *Entry[K, V] {
