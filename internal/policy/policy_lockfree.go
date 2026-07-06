@@ -90,11 +90,6 @@ func (p *PolicyLockFree[K]) Access(keyHash uint64) {
 	p.admit.Increment(keyHash)
 }
 
-// AccessBatch records accesses for multiple keys.
-func (p *PolicyLockFree[K]) AccessBatch(keyHashes []uint64) {
-	p.admit.IncrementBatch(keyHashes)
-}
-
 // Has checks if a key is tracked by the policy.
 func (p *PolicyLockFree[K]) Has(key K) bool {
 	p.mu.Lock()

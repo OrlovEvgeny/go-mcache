@@ -185,6 +185,10 @@ func WithExpirationResolution[K comparable, V any](resolution time.Duration) Opt
 
 // WithIgnoreInternalCost configures whether internal metadata cost
 // should be ignored when calculating total cache cost.
+//
+// Deprecated: this option has never had any effect — cost accounting only
+// ever counts the caller-provided cost. It is kept for compile
+// compatibility and will be removed in a future major version.
 func WithIgnoreInternalCost[K comparable, V any](ignore bool) Option[K, V] {
 	return func(c *config[K, V]) {
 		c.IgnoreInternalCost = ignore

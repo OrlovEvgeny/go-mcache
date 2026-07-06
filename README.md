@@ -24,11 +24,11 @@ Cache[K, V]
 ├── Policy[K]            generic over key type (no hash-collision ambiguity)
 │   ├── TinyLFU          doorkeeper (Bloom filter) + Count-Min Sketch
 │   └── SampledLFU[K]    dense array + map for O(1) random sampling
-├── ExpiryWheel          coarse timing wheel for best-effort background expiry
+├── ExpiryWheel          coarse timing wheel, per-bucket locks
 ├── RadixTree            opt-in, for prefix search on string keys
 ├── WriteBuffer          lock-free ring buffer for async batching
-├── ReadBuffer           lossy batched policy-access replay
-└── Metrics              optional atomic counters
+├── ReadBuffer           lossy batched policy-access replay (mutex policy only)
+└── Metrics              opt-in striped atomic counters
 ```
 
 ### Why exact-key policy matters
@@ -48,7 +48,7 @@ Entries with TTL are scheduled into a coarse timing wheel for best-effort backgr
 go get github.com/OrlovEvgeny/go-mcache
 ```
 
-Requires Go 1.23+
+Requires Go 1.26+
 
 ## Usage
 
@@ -130,7 +130,7 @@ When the write buffer is full, the operation falls back to synchronous execution
 | `WithNumCounters` | TinyLFU counters (recommend 10x max entries) | auto |
 | `WithShardCount` | Number of shards (power of 2) | 1024 |
 | `WithBufferItems` | Async write buffer size (0 = sync) | 0 |
-| `WithMetrics` | Enable cache metrics collection | true |
+| `WithMetrics` | Enable cache metrics collection | false |
 | `WithExpirationResolution` | Background expiration tick resolution | 100ms |
 | `WithDefaultTTL` | Default TTL for entries without explicit TTL | 0 (no expiry) |
 | `WithCostFunc` | Custom cost calculator | cost = 1 |
@@ -239,15 +239,15 @@ TTL and bounded scenarios:
 
 All operations are safe for concurrent use. The concurrency model:
 
-- **Reads**: shard `RLock` + optional best-effort read buffering for policy replay
-- **Writes**: overwrite fast path updates entries in-place when possible; inserts go through admission/eviction
-- **Expiration**: timing-wheel scheduling on writes, lazy delete on background ticks
-- **Metrics**: atomic counters when enabled
+- **Reads**: shard `RLock`; with the default lock-free policy, accesses are recorded directly via CAS on scattered sketch words
+- **Writes**: a single shard lock per set (insert and overwrite share one path); inserts go through admission/eviction
+- **Expiration**: timing-wheel scheduling on writes (per-bucket locks), lazy delete on background ticks
+- **Metrics**: opt-in; hot counters are striped across cache lines to avoid contention
 - **Shards**: cache-line padded to prevent false sharing between cores
 
 ## Legacy API
 
-The `mcache.New()` / `CacheDriver` API from v1 still works. It uses `safeMap` + GC-based expiration without TinyLFU. See `mcache.go` and `gcmap/` for details. For new code, use the generic `NewCache[K, V]` API.
+The `mcache.New()` / `CacheDriver` API from v1 still works and is now a thin wrapper over the generic `Cache` engine, so it gets the sharded store and timing-wheel expiration for free. The old `safeMap`/`gcmap` packages are deprecated and no longer used. For new code, use the generic `NewCache[K, V]` API.
 
 ## License
 

@@ -5,3 +5,4 @@
 cpu.prof
 mem.prof
 go-mcache.test
+.DS_Store

@@ -208,49 +208,6 @@ func TestPolicyLockFreeConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-func TestBlockedBloomFilter(t *testing.T) {
-	bf := NewBlockedBloomFilter(10000, 0.01)
-
-	keyHash := uint64(12345)
-	if bf.Contains(keyHash) {
-		t.Error("New bloom filter should not contain any key")
-	}
-
-	bf.Add(keyHash)
-	if !bf.Contains(keyHash) {
-		t.Error("Blocked bloom filter should contain added key")
-	}
-
-	bf.Reset()
-	if bf.Contains(keyHash) {
-		t.Error("Blocked bloom filter should be empty after reset")
-	}
-}
-
-func TestCuckooFilter(t *testing.T) {
-	cf := NewCuckooFilter(1000, 0.01)
-
-	keyHash := uint64(12345)
-	if cf.Contains(keyHash) {
-		t.Error("New cuckoo filter should not contain any key")
-	}
-
-	if !cf.Add(keyHash) {
-		t.Error("Should be able to add key")
-	}
-
-	if !cf.Contains(keyHash) {
-		t.Error("Cuckoo filter should contain added key")
-	}
-
-	if !cf.Delete(keyHash) {
-		t.Error("Should be able to delete key")
-	}
-
-	if cf.Contains(keyHash) {
-		t.Error("Cuckoo filter should not contain deleted key")
-	}
-}
 
 func BenchmarkCMSketchLockFreeIncrement(b *testing.B) {
 	s := newCMSketchLockFree(1 << 20)
@@ -338,58 +295,6 @@ func BenchmarkPolicyLockFreeAccessParallel(b *testing.B) {
 			p.Access(rng.Uint64())
 		}
 	})
-}
-
-func BenchmarkBlockedBloomFilterAdd(b *testing.B) {
-	bf := NewBlockedBloomFilter(1000000, 0.01)
-	rng := rand.New(rand.NewSource(42))
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		bf.Add(rng.Uint64())
-	}
-}
-
-func BenchmarkBlockedBloomFilterContains(b *testing.B) {
-	bf := NewBlockedBloomFilter(1000000, 0.01)
-	rng := rand.New(rand.NewSource(42))
-
-	// Pre-populate
-	for i := 0; i < 100000; i++ {
-		bf.Add(rng.Uint64())
-	}
-
-	rng = rand.New(rand.NewSource(42))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		bf.Contains(rng.Uint64())
-	}
-}
-
-func BenchmarkCuckooFilterAdd(b *testing.B) {
-	cf := NewCuckooFilter(1000000, 0.01)
-	rng := rand.New(rand.NewSource(42))
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		cf.Add(rng.Uint64())
-	}
-}
-
-func BenchmarkCuckooFilterContains(b *testing.B) {
-	cf := NewCuckooFilter(1000000, 0.01)
-	rng := rand.New(rand.NewSource(42))
-
-	// Pre-populate
-	for i := 0; i < 100000; i++ {
-		cf.Add(rng.Uint64())
-	}
-
-	rng = rand.New(rand.NewSource(42))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		cf.Contains(rng.Uint64())
-	}
 }
 
 // Compare old vs new implementations

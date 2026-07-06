@@ -149,19 +149,3 @@ func (s *cmSketchLockFree) Clear() {
 	}
 }
 
-// IncrementBatch increments counters for multiple keys.
-// This is more efficient for batch operations due to better cache locality.
-func (s *cmSketchLockFree) IncrementBatch(keyHashes []uint64) {
-	for _, keyHash := range keyHashes {
-		s.Increment(keyHash)
-	}
-}
-
-// EstimateBatch returns estimated frequencies for multiple keys.
-func (s *cmSketchLockFree) EstimateBatch(keyHashes []uint64, results []int64) {
-	for i, keyHash := range keyHashes {
-		if i < len(results) {
-			results[i] = s.Estimate(keyHash)
-		}
-	}
-}

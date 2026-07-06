@@ -129,21 +129,6 @@ func (t *TinyLFULockFree) Clear() {
 	}
 }
 
-// IncrementBatch records accesses for multiple keys.
-// More efficient than individual Increment calls.
-func (t *TinyLFULockFree) IncrementBatch(keyHashes []uint64) {
-	for _, keyHash := range keyHashes {
-		// Check doorkeeper: only count if seen before
-		if t.door.Add(keyHash) {
-			t.freq.Increment(keyHash)
-		}
-	}
-
-	if len(keyHashes) > 0 {
-		t.countIncrement(keyHashes[0], int64(len(keyHashes)))
-	}
-}
-
 // FillRatio returns the doorkeeper bloom filter fill ratio.
 // Useful for monitoring and debugging.
 func (t *TinyLFULockFree) FillRatio() float64 {

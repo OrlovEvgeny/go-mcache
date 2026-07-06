@@ -588,12 +588,10 @@ func (c *Cache[K, V]) processWriteBatch(items []writeItem[K, V]) {
 }
 
 // processReadBatch replays access events in batches.
+// Only used with the mutex-based policy; the lock-free policy records
+// accesses directly on the Get path.
 func (c *Cache[K, V]) processReadBatch(items []uint64) {
-	if len(items) == 0 || c.policy == nil {
-		return
-	}
-	if batcher, ok := c.policy.(interface{ AccessBatch([]uint64) }); ok {
-		batcher.AccessBatch(items)
+	if c.policy == nil {
 		return
 	}
 	for _, keyHash := range items {

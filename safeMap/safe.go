@@ -1,3 +1,7 @@
+// Package safeMap is the storage backend of the legacy v1 API.
+//
+// Deprecated: the CacheDriver no longer uses it; it is kept only for
+// direct importers. Use the generic Cache (mcache.NewCache) instead.
 package safeMap
 
 import (
