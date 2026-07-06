@@ -54,6 +54,8 @@ type writeItem[K comparable, V any] struct {
 
 // NewCache creates a new generic Cache with the given options.
 func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
+	clock.Ensure()
+
 	cfg := defaultConfig[K, V]()
 	for _, opt := range opts {
 		opt(cfg)
@@ -145,12 +147,12 @@ func (c *Cache[K, V]) Get(key K) (V, bool) {
 	keyHash := c.store.KeyHash(key)
 	entry, ok := c.store.GetByHash(key, keyHash)
 	if !ok {
-		c.metrics.incMiss()
+		c.metrics.incMiss(keyHash)
 		return zero, false
 	}
 
 	c.recordAccess(keyHash)
-	c.metrics.incHit()
+	c.metrics.incHit(keyHash)
 
 	return entry.Value, true
 }
@@ -253,8 +255,8 @@ func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
 		c.config.OnEvict(prev.Key, prev.Value, prev.Cost)
 	}
 
-	c.metrics.incSet()
-	c.metrics.addCost(entry.Cost)
+	c.metrics.incSet(entry.KeyHash)
+	c.metrics.addCost(entry.KeyHash, entry.Cost)
 
 	return true
 }
@@ -325,7 +327,7 @@ func (c *Cache[K, V]) doDelete(key K, keyHash uint64) bool {
 		}
 	}
 
-	c.metrics.incDelete()
+	c.metrics.incDelete(keyHash)
 	return true
 }
 
@@ -394,9 +396,9 @@ func (c *Cache[K, V]) GetBatch(keys []K) *BatchResult[K, V] {
 			result.Values[i] = req.Results[i].Value
 			result.Found[i] = true
 			c.recordAccess(result.Hashes[i])
-			c.metrics.incHit()
+			c.metrics.incHit(result.Hashes[i])
 		} else {
-			c.metrics.incMiss()
+			c.metrics.incMiss(result.Hashes[i])
 		}
 	}
 
@@ -437,9 +439,9 @@ func (c *Cache[K, V]) GetBatchOptimized(keys []K) *BatchResult[K, V] {
 			result.Values[i] = entries[i].Value
 			result.Found[i] = true
 			c.recordAccess(result.Hashes[i])
-			c.metrics.incHit()
+			c.metrics.incHit(result.Hashes[i])
 		} else {
-			c.metrics.incMiss()
+			c.metrics.incMiss(result.Hashes[i])
 		}
 	}
 

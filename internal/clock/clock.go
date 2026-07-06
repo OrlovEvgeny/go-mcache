@@ -14,22 +14,35 @@ var (
 	cachedNano atomic.Int64
 	stopCh     = make(chan struct{})
 	stopOnce   sync.Once
+	startOnce  sync.Once
 )
 
 func init() {
+	// Only snapshot the time at import; the updater goroutine is started
+	// lazily by Ensure so merely importing the library does not spawn a
+	// goroutine that wakes up 1000 times per second.
 	cachedNano.Store(time.Now().UnixNano())
-	go func() {
-		ticker := time.NewTicker(time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				cachedNano.Store(time.Now().UnixNano())
-			case <-stopCh:
-				return
+}
+
+// Ensure starts the background updater goroutine on first call.
+// Cache constructors call it; until then NowNano returns the import-time
+// snapshot. Safe to call from multiple goroutines.
+func Ensure() {
+	startOnce.Do(func() {
+		cachedNano.Store(time.Now().UnixNano())
+		go func() {
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					cachedNano.Store(time.Now().UnixNano())
+				case <-stopCh:
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // NowNano returns the cached current time in Unix nanoseconds.

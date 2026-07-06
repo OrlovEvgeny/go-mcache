@@ -53,8 +53,8 @@ func defaultConfig[K comparable, V any]() *config[K, V] {
 		MaxCost:           0,    // unlimited
 		NumCounters:       0,    // will be set based on MaxEntries
 		ShardCount:        1024, // 1024 shards
-		BufferItems:       0,    // No buffering by default (synchronous writes)
-		MetricsEnabled:    true,
+		BufferItems:       0,     // No buffering by default (synchronous writes)
+		MetricsEnabled:    false, // Metrics are opt-in: counters cost atomics on every op
 		ExpiryResolution:  100 * time.Millisecond,
 		UseLockFreePolicy: true, // Use lock-free policy by default for better read performance
 	}

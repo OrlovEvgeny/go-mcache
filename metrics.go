@@ -2,16 +2,31 @@ package mcache
 
 import "sync/atomic"
 
+// metricStripes is the number of stripes for hot-path counters.
+// Must be a power of two.
+const metricStripes = 8
+
+// metricLine holds the hot-path counters for one stripe, padded to a full
+// cache line so stripes never share a line. hits/misses are bumped on every
+// Get: a single shared counter would serialize all reader cores on one line.
+type metricLine struct {
+	hits      atomic.Int64
+	misses    atomic.Int64
+	sets      atomic.Int64
+	deletes   atomic.Int64
+	costAdded atomic.Int64
+	_         [24]byte // pad to 64 bytes
+}
+
 // Metrics holds cache statistics.
+// Hot counters (hits/misses/sets/deletes/costAdded) are striped by key hash;
+// cold counters are plain atomics updated only on eviction/expiry paths.
 type Metrics struct {
-	hits        atomic.Int64 // Cache hits
-	misses      atomic.Int64 // Cache misses
-	sets        atomic.Int64 // Successful sets
-	deletes     atomic.Int64 // Successful deletes
+	stripes [metricStripes]metricLine
+
 	evictions   atomic.Int64 // Evictions due to size/cost limit
 	expirations atomic.Int64 // Expirations due to TTL
 	rejections  atomic.Int64 // Rejections by TinyLFU admission policy
-	costAdded   atomic.Int64 // Total cost added
 	costEvicted atomic.Int64 // Total cost evicted
 	bufferDrops atomic.Int64 // Buffer saturation drops (sync fallback used)
 }
@@ -36,36 +51,49 @@ func newMetrics() *Metrics {
 	return &Metrics{}
 }
 
+// line returns the stripe for the given key hash.
+func (m *Metrics) line(keyHash uint64) *metricLine {
+	return &m.stripes[keyHash&(metricStripes-1)]
+}
+
 // incHit increments the hit counter.
-func (m *Metrics) incHit() {
+func (m *Metrics) incHit(keyHash uint64) {
 	if m == nil {
 		return
 	}
-	m.hits.Add(1)
+	m.line(keyHash).hits.Add(1)
 }
 
 // incMiss increments the miss counter.
-func (m *Metrics) incMiss() {
+func (m *Metrics) incMiss(keyHash uint64) {
 	if m == nil {
 		return
 	}
-	m.misses.Add(1)
+	m.line(keyHash).misses.Add(1)
 }
 
 // incSet increments the set counter.
-func (m *Metrics) incSet() {
+func (m *Metrics) incSet(keyHash uint64) {
 	if m == nil {
 		return
 	}
-	m.sets.Add(1)
+	m.line(keyHash).sets.Add(1)
 }
 
 // incDelete increments the delete counter.
-func (m *Metrics) incDelete() {
+func (m *Metrics) incDelete(keyHash uint64) {
 	if m == nil {
 		return
 	}
-	m.deletes.Add(1)
+	m.line(keyHash).deletes.Add(1)
+}
+
+// addCost adds to the cost added counter.
+func (m *Metrics) addCost(keyHash uint64, cost int64) {
+	if m == nil {
+		return
+	}
+	m.line(keyHash).costAdded.Add(cost)
 }
 
 // incEviction increments the eviction counter.
@@ -92,14 +120,6 @@ func (m *Metrics) incRejection() {
 	m.rejections.Add(1)
 }
 
-// addCost adds to the cost added counter.
-func (m *Metrics) addCost(cost int64) {
-	if m == nil {
-		return
-	}
-	m.costAdded.Add(cost)
-}
-
 // addEvictedCost adds to the cost evicted counter.
 func (m *Metrics) addEvictedCost(cost int64) {
 	if m == nil {
@@ -121,10 +141,18 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	if m == nil {
 		return MetricsSnapshot{}
 	}
-	hits := m.hits.Load()
-	misses := m.misses.Load()
-	total := hits + misses
 
+	var hits, misses, sets, deletes, costAdded int64
+	for i := range m.stripes {
+		line := &m.stripes[i]
+		hits += line.hits.Load()
+		misses += line.misses.Load()
+		sets += line.sets.Load()
+		deletes += line.deletes.Load()
+		costAdded += line.costAdded.Load()
+	}
+
+	total := hits + misses
 	var hitRatio float64
 	if total > 0 {
 		hitRatio = float64(hits) / float64(total)
@@ -133,12 +161,12 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	return MetricsSnapshot{
 		Hits:        hits,
 		Misses:      misses,
-		Sets:        m.sets.Load(),
-		Deletes:     m.deletes.Load(),
+		Sets:        sets,
+		Deletes:     deletes,
 		Evictions:   m.evictions.Load(),
 		Expirations: m.expirations.Load(),
 		Rejections:  m.rejections.Load(),
-		CostAdded:   m.costAdded.Load(),
+		CostAdded:   costAdded,
 		CostEvicted: m.costEvicted.Load(),
 		BufferDrops: m.bufferDrops.Load(),
 		HitRatio:    hitRatio,
@@ -150,14 +178,17 @@ func (m *Metrics) Reset() {
 	if m == nil {
 		return
 	}
-	m.hits.Store(0)
-	m.misses.Store(0)
-	m.sets.Store(0)
-	m.deletes.Store(0)
+	for i := range m.stripes {
+		line := &m.stripes[i]
+		line.hits.Store(0)
+		line.misses.Store(0)
+		line.sets.Store(0)
+		line.deletes.Store(0)
+		line.costAdded.Store(0)
+	}
 	m.evictions.Store(0)
 	m.expirations.Store(0)
 	m.rejections.Store(0)
-	m.costAdded.Store(0)
 	m.costEvicted.Store(0)
 	m.bufferDrops.Store(0)
 }
