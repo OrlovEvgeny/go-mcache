@@ -1,35 +1,19 @@
 package mcache
 
 import (
-	"context"
 	"time"
-
-	"github.com/OrlovEvgeny/go-mcache/gcmap"
-	"github.com/OrlovEvgeny/go-mcache/internal/clock"
-	"github.com/OrlovEvgeny/go-mcache/item"
-	"github.com/OrlovEvgeny/go-mcache/safeMap"
 )
 
 // TTL_FOREVER represents an infinite TTL (no expiration).
 const TTL_FOREVER = 0
 
-// initStore initializes the underlying storage and GC, returning a context and cancel function.
-func (mc *CacheDriver) initStore() (context.Context, context.CancelFunc) {
-	ctx, finish := context.WithCancel(context.Background())
-
-	// Initialize sharded storage with default settings.
-	mc.storage = safeMap.NewStorage()
-	// Start garbage collector with lifecycle tied to ctx.
-	mc.gc = gcmap.NewGC(ctx, mc.storage)
-	return ctx, finish
-}
-
-// CacheDriver manages cache operations with storage and expiration.
+// CacheDriver is the legacy v1 cache API.
+//
+// It is now a thin wrapper over the generic Cache engine: the old
+// safeMap storage and channel-based GC worker are gone, so legacy callers
+// get the sharded store and timing-wheel expiration without code changes.
 type CacheDriver struct {
-	ctx      context.Context
-	closeCtx context.CancelFunc
-	storage  safeMap.SafeMap
-	gc       *gcmap.GC
+	cache *Cache[string, any]
 }
 
 // StartInstance is deprecated; use New instead.
@@ -39,84 +23,54 @@ func StartInstance() *CacheDriver {
 
 // New creates and initializes a new CacheDriver.
 func New() *CacheDriver {
-	cdriver := new(CacheDriver)
-	// storage and gc are set up in initStore.
-	ctx, finish := cdriver.initStore()
-	cdriver.ctx = ctx
-	cdriver.closeCtx = finish
-	return cdriver
+	return &CacheDriver{
+		cache: NewCache[string, any](),
+	}
 }
 
 // Get retrieves a value by key. Returns (value, true) if found and not expired.
 func (mc *CacheDriver) Get(key string) (interface{}, bool) {
-	entity, ok := mc.storage.FindItem(key)
-	if !ok {
-		return nil, false
-	}
-
-	// Handle non-expiring entries.
-	if entity.ExpireAt == 0 {
-		return entity.DataLink, true
-	}
-	// Passive expiration check using cached time.
-	if entity.IsExpired(clock.NowNano()) {
-		return nil, false
-	}
-	return entity.DataLink, true
+	return mc.cache.Get(key)
 }
 
 // Set inserts or updates a key with the given value and TTL.
 func (mc *CacheDriver) Set(key string, value interface{}, ttl time.Duration) error {
-	var expireAt int64
-	if ttl > 0 {
-		expireAt = clock.NowNano() + int64(ttl)
-	}
-
-	cacheItem := &item.Item{
-		Key:      key,
-		ExpireAt: expireAt,
-		DataLink: value,
-	}
-
-	mc.storage.InsertItem(key, cacheItem)
-
-	if expireAt > 0 {
-		mc.gc.Expired(key, ttl)
-	} else {
-		// Remove any existing expiration if setting to infinite.
-		mc.gc.RemoveKey(key)
-	}
+	mc.cache.Set(key, value, ttl)
 	return nil
 }
 
 // Remove deletes a key from the cache and expiration tracking.
 func (mc *CacheDriver) Remove(key string) {
-	mc.storage.Delete(key)
-	mc.gc.RemoveKey(key)
+	mc.cache.Delete(key)
 }
 
 // Truncate clears all cache entries and pending expirations.
 func (mc *CacheDriver) Truncate() {
-	mc.storage.Truncate()
-	mc.gc.Truncate()
+	mc.cache.Clear()
 }
 
 // Len returns the number of current cache entries.
 func (mc *CacheDriver) Len() int {
-	return mc.storage.Len()
+	return mc.cache.Len()
 }
 
 // GCBufferQueue returns the count of pending expirations in the GC.
+//
+// Deprecated: the channel-based GC queue no longer exists; expiration is
+// handled by a timing wheel. Always returns 0.
 func (mc *CacheDriver) GCBufferQueue() int {
-	return mc.gc.LenBufferKeyChan()
+	return 0
 }
 
-// Close stops the GC and returns all non-expired entries.
+// Close stops the cache and returns all non-expired entries.
 func (mc *CacheDriver) Close() map[string]interface{} {
-	if mc.closeCtx != nil {
-		mc.closeCtx()
+	result := make(map[string]interface{}, mc.cache.Len())
+	it := mc.cache.Scan(0, 512)
+	for it.Next() {
+		result[it.Key()] = it.Value()
 	}
-	return mc.storage.Close()
+	mc.cache.Close()
+	return result
 }
 
 // SetPointer is deprecated; use Set instead.
