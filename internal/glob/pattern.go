@@ -192,70 +192,71 @@ func unescape(s string) string {
 }
 
 // Match checks if the key matches the pattern.
+//
+// Matching is iterative with single-star backtracking (the classic greedy
+// wildcard algorithm): worst case O(len(key) * len(segments)). The previous
+// recursive implementation backtracked exponentially on patterns with
+// several stars (e.g. "*a*a*a*x"), which is a CPU DoS with adversarial
+// patterns. * and ** are equivalent: keys have no path semantics here.
 func (p *Pattern) Match(key string) bool {
-	return p.matchSegments(key, 0, 0)
+	segs := p.segments
+	si, ki := 0, 0
+	starSeg, starKey := -1, 0 // most recent star segment and the key pos after it
+
+	for {
+		if si < len(segs) {
+			seg := &segs[si]
+			switch seg.typ {
+			case segStar, segDouble:
+				// Greedily match zero characters; on later mismatch,
+				// backtrack here and consume one more.
+				starSeg = si
+				starKey = ki
+				si++
+				continue
+
+			case segLiteral:
+				if len(seg.literal) <= len(key)-ki && key[ki:ki+len(seg.literal)] == seg.literal {
+					ki += len(seg.literal)
+					si++
+					continue
+				}
+
+			case segQuestion:
+				if ki < len(key) {
+					ki++
+					si++
+					continue
+				}
+
+			case segCharset:
+				if ki < len(key) && seg.matchesByte(key[ki]) {
+					ki++
+					si++
+					continue
+				}
+			}
+		} else if ki == len(key) {
+			return true
+		}
+
+		// Mismatch: let the last star swallow one more character.
+		if starSeg == -1 || starKey >= len(key) {
+			return false
+		}
+		starKey++
+		ki = starKey
+		si = starSeg + 1
+	}
 }
 
-// matchSegments recursively matches key against pattern segments.
-func (p *Pattern) matchSegments(key string, keyPos int, segIdx int) bool {
-	// Base case: all segments matched
-	if segIdx >= len(p.segments) {
-		return keyPos == len(key)
+// matchesByte reports whether c satisfies a charset segment.
+func (s *segment) matchesByte(c byte) bool {
+	inSet := strings.IndexByte(s.charset, c) >= 0
+	if s.negated {
+		return !inSet
 	}
-
-	seg := p.segments[segIdx]
-
-	switch seg.typ {
-	case segLiteral:
-		if keyPos+len(seg.literal) > len(key) {
-			return false
-		}
-		if key[keyPos:keyPos+len(seg.literal)] != seg.literal {
-			return false
-		}
-		return p.matchSegments(key, keyPos+len(seg.literal), segIdx+1)
-
-	case segQuestion:
-		if keyPos >= len(key) {
-			return false
-		}
-		return p.matchSegments(key, keyPos+1, segIdx+1)
-
-	case segCharset:
-		if keyPos >= len(key) {
-			return false
-		}
-		c := key[keyPos]
-		inSet := strings.IndexByte(seg.charset, c) >= 0
-		if seg.negated {
-			inSet = !inSet
-		}
-		if !inSet {
-			return false
-		}
-		return p.matchSegments(key, keyPos+1, segIdx+1)
-
-	case segStar:
-		// * matches zero or more characters
-		// Try matching zero characters first, then progressively more
-		for i := keyPos; i <= len(key); i++ {
-			if p.matchSegments(key, i, segIdx+1) {
-				return true
-			}
-		}
-		return false
-
-	case segDouble:
-		// ** matches everything
-		for i := keyPos; i <= len(key); i++ {
-			if p.matchSegments(key, i, segIdx+1) {
-				return true
-			}
-		}
-		return false
-	}
-
-	return false
+	return inSet
 }
 
 // Prefix returns the literal prefix of the pattern.

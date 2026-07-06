@@ -2,6 +2,7 @@
 package radix
 
 import (
+	"slices"
 	"sync"
 )
 
@@ -218,10 +219,12 @@ func (t *Tree) WalkPrefix(prefix string, fn func(key string, hash uint64) bool) 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	// Find the node that matches the prefix
+	// Find the node that matches the prefix, accumulating the full path.
+	// The matched node's prefix may extend past the search prefix, so the
+	// walk must start from the accumulated path, not the search prefix.
 	n := t.root
 	remaining := prefix
-	keyBuilder := ""
+	path := ""
 
 	for len(remaining) > 0 {
 		c := remaining[0]
@@ -236,7 +239,7 @@ func (t *Tree) WalkPrefix(prefix string, fn func(key string, hash uint64) bool) 
 			return
 		}
 
-		keyBuilder += child.prefix
+		path += child.prefix
 		if commonLen >= len(remaining) {
 			// Found node containing prefix
 			n = child
@@ -248,10 +251,13 @@ func (t *Tree) WalkPrefix(prefix string, fn func(key string, hash uint64) bool) 
 	}
 
 	// Walk all keys under this node
-	t.walkNode(n, prefix, fn)
+	t.walkNode(n, path, fn)
 }
 
 // walkNode recursively walks a node and its children.
+// Children are visited in byte order so the walk is deterministic
+// (lexicographic): cursor-based pagination re-walks the tree and would
+// skip or duplicate keys if the order changed between calls.
 func (t *Tree) walkNode(n *node, keyPrefix string, fn func(key string, hash uint64) bool) bool {
 	if n.isLeaf {
 		if !fn(keyPrefix, n.keyHash) {
@@ -259,7 +265,18 @@ func (t *Tree) walkNode(n *node, keyPrefix string, fn func(key string, hash uint
 		}
 	}
 
-	for _, child := range n.children {
+	if len(n.children) == 0 {
+		return true
+	}
+
+	order := make([]byte, 0, len(n.children))
+	for b := range n.children {
+		order = append(order, b)
+	}
+	slices.Sort(order)
+
+	for _, b := range order {
+		child := n.children[b]
 		if !t.walkNode(child, keyPrefix+child.prefix, fn) {
 			return false
 		}

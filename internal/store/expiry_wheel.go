@@ -16,15 +16,26 @@ type ExpiryWheelEntry[K comparable] struct {
 	ExpireAt int64
 }
 
+// wheelBucket holds the entries scheduled for one tick slot.
+type wheelBucket[K comparable] struct {
+	mu    sync.Mutex
+	items []ExpiryWheelEntry[K]
+}
+
 // ExpiryWheel is a coarse hashed timing wheel for best-effort background
 // expiration. Exact TTL enforcement still happens on reads.
+//
+// Locking is per bucket: a Schedule only touches the slot its tick maps to,
+// so concurrent TTL writes across shards don't serialize on one wheel-wide
+// mutex. Advance is serialized separately and takes one bucket at a time.
 type ExpiryWheel[K comparable] struct {
 	resolution int64
 	mask       uint64
 
-	mu          sync.Mutex
+	advanceMu   sync.Mutex // serializes Advance/Clear; guards currentTick
 	currentTick int64
-	buckets     [][]ExpiryWheelEntry[K]
+
+	buckets []wheelBucket[K]
 }
 
 // NewExpiryWheel creates a timing wheel with the provided resolution.
@@ -38,7 +49,7 @@ func NewExpiryWheel[K comparable](resolution time.Duration) *ExpiryWheel[K] {
 		resolution:  int64(resolution),
 		mask:        uint64(bucketCount - 1),
 		currentTick: clock.NowNano() / int64(resolution),
-		buckets:     make([][]ExpiryWheelEntry[K], bucketCount),
+		buckets:     make([]wheelBucket[K], bucketCount),
 	}
 }
 
@@ -54,23 +65,23 @@ func (w *ExpiryWheel[K]) Schedule(key K, keyHash uint64, expireAt int64) {
 	}
 
 	tick := (expireAt + w.resolution - 1) / w.resolution
-	idx := uint64(tick) & w.mask
+	b := &w.buckets[uint64(tick)&w.mask]
 
-	w.mu.Lock()
-	w.buckets[idx] = append(w.buckets[idx], ExpiryWheelEntry[K]{
+	b.mu.Lock()
+	b.items = append(b.items, ExpiryWheelEntry[K]{
 		Key:      key,
 		KeyHash:  keyHash,
 		ExpireAt: expireAt,
 	})
-	w.mu.Unlock()
+	b.mu.Unlock()
 }
 
 // Advance drains all buckets up to now and returns entries that are due.
 func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
 	nowTick := now / w.resolution
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.advanceMu.Lock()
+	defer w.advanceMu.Unlock()
 
 	if nowTick <= w.currentTick {
 		return nil
@@ -79,12 +90,16 @@ func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
 	var expired []ExpiryWheelEntry[K]
 	for w.currentTick < nowTick {
 		w.currentTick++
-		idx := uint64(w.currentTick) & w.mask
-		bucket := w.buckets[idx]
+		b := &w.buckets[uint64(w.currentTick)&w.mask]
+
+		b.mu.Lock()
+		bucket := b.items
 		if len(bucket) == 0 {
+			b.mu.Unlock()
 			continue
 		}
-		w.buckets[idx] = nil
+		b.items = nil
+		b.mu.Unlock()
 
 		for _, item := range bucket {
 			if item.ExpireAt <= now {
@@ -92,9 +107,12 @@ func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
 				continue
 			}
 
+			// Not due yet (long TTL wrapped around) — reschedule.
 			futureTick := (item.ExpireAt + w.resolution - 1) / w.resolution
-			futureIdx := uint64(futureTick) & w.mask
-			w.buckets[futureIdx] = append(w.buckets[futureIdx], item)
+			fb := &w.buckets[uint64(futureTick)&w.mask]
+			fb.mu.Lock()
+			fb.items = append(fb.items, item)
+			fb.mu.Unlock()
 		}
 	}
 
@@ -103,10 +121,14 @@ func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
 
 // Clear removes all scheduled items and resets the current cursor.
 func (w *ExpiryWheel[K]) Clear() {
-	w.mu.Lock()
+	w.advanceMu.Lock()
+	defer w.advanceMu.Unlock()
+
 	for i := range w.buckets {
-		w.buckets[i] = nil
+		b := &w.buckets[i]
+		b.mu.Lock()
+		b.items = nil
+		b.mu.Unlock()
 	}
 	w.currentTick = clock.NowNano() / w.resolution
-	w.mu.Unlock()
 }

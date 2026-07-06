@@ -311,40 +311,41 @@ func (s *ShardedStore[K, V]) Entries() []*Entry[K, V] {
 
 // Scan returns entries starting from cursor position with a limit.
 // Returns entries and the next cursor position.
+//
+// The cursor is the index of the next shard to read and each shard is
+// returned whole: resuming mid-shard by item offset would rely on Go's
+// randomized map iteration order and skip or duplicate entries between
+// calls. count is a hint — a page may exceed it by up to one shard.
 func (s *ShardedStore[K, V]) Scan(cursor uint64, count int) ([]*Entry[K, V], uint64) {
 	if count <= 0 {
 		count = 10
 	}
 
-	entries := make([]*Entry[K, V], 0, count)
-	shardIdx := int(cursor >> 32)
-	itemIdx := int(cursor & 0xFFFFFFFF)
+	shardIdx := int(cursor)
+	if shardIdx >= len(s.shards) {
+		return nil, 0
+	}
 
-	for shardIdx < len(s.shards) && len(entries) < count {
+	entries := make([]*Entry[K, V], 0, count)
+	for shardIdx < len(s.shards) {
 		sh := s.shards[shardIdx]
 
 		sh.mu.RLock()
-		idx := 0
 		for _, entry := range sh.m {
-			if idx >= itemIdx {
-				entries = append(entries, entry)
-				if len(entries) >= count {
-					// Return cursor for next position
-					nextCursor := (uint64(shardIdx) << 32) | uint64(idx+1)
-					sh.mu.RUnlock()
-					return entries, nextCursor
-				}
-			}
-			idx++
+			entries = append(entries, entry)
 		}
 		sh.mu.RUnlock()
 
 		shardIdx++
-		itemIdx = 0
+		if len(entries) >= count {
+			break
+		}
 	}
 
-	// Iteration complete
-	return entries, 0
+	if shardIdx >= len(s.shards) {
+		return entries, 0
+	}
+	return entries, uint64(shardIdx)
 }
 
 // KeyHash returns the hash function used by this store.

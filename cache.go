@@ -119,7 +119,11 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 			c.processWriteBatch,
 		)
 	}
-	if cfg.MaxEntries > 0 || cfg.MaxCost > 0 {
+	// The read buffer only pays off for the mutex-based policy, where it
+	// batches accesses to amortize lock acquisitions. The lock-free policy's
+	// Access is a handful of CAS ops on scattered sketch words, which scales
+	// better than funneling every Get through one shared ring buffer tail.
+	if (cfg.MaxEntries > 0 || cfg.MaxCost > 0) && !cfg.UseLockFreePolicy {
 		c.readBuffer = buffer.NewLossyBuffer[uint64](
 			1024,
 			64,

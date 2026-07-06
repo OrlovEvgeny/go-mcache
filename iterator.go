@@ -135,22 +135,37 @@ func (it *Iterator[K, V]) fetchPage() bool {
 }
 
 // fetchPrefixPage retrieves the next page using radix tree prefix search.
+// The radix walk yields the exact keys, so each entry is fetched with a
+// direct O(1) shard lookup instead of scanning the store per match.
 func (it *Iterator[K, V]) fetchPrefixPage() bool {
 	// If already done, don't refetch
 	if it.done {
 		return false
 	}
 
-	// Get key hashes matching the prefix
-	hashes := it.cache.radixTree.FindByPrefix(it.prefix, it.count*2)
-	if len(hashes) == 0 {
-		it.done = true
-		return false
-	}
-
-	// Skip to cursor position
+	// Collect the next window of matching keys from the radix tree.
+	// The cursor is the number of matches already served.
 	start := int(it.cursor)
-	if start >= len(hashes) {
+	type match struct {
+		key  string
+		hash uint64
+	}
+	matches := make([]match, 0, it.count)
+	seen := 0
+	exhausted := true
+	it.cache.radixTree.WalkPrefix(it.prefix, func(key string, hash uint64) bool {
+		if seen >= start {
+			matches = append(matches, match{key: key, hash: hash})
+			if len(matches) >= it.count {
+				exhausted = false
+				return false
+			}
+		}
+		seen++
+		return true
+	})
+
+	if len(matches) == 0 {
 		it.done = true
 		return false
 	}
@@ -167,27 +182,25 @@ func (it *Iterator[K, V]) fetchPrefixPage() bool {
 		entries = make([]*store.Entry[K, V], 0, it.count)
 	}
 
-	// Collect entries
-	for i := start; i < len(hashes) && len(entries) < it.count; i++ {
-		keyHash := hashes[i]
-		// Find entry by hash
-		it.cache.store.Range(func(entry *store.Entry[K, V]) bool {
-			if entry.KeyHash == keyHash {
-				if it.matchEntry(entry) {
-					entries = append(entries, entry)
-				}
-				return false // Found it
-			}
-			return true
-		})
+	// Fetch each entry directly by key (prefix search implies K == string).
+	for _, m := range matches {
+		key, ok := any(m.key).(K)
+		if !ok {
+			continue
+		}
+		entry, ok := it.cache.store.GetByHash(key, m.hash)
+		if !ok {
+			continue
+		}
+		if it.matchEntry(entry) {
+			entries = append(entries, entry)
+		}
 	}
 
 	it.page = entries
 	it.pos = 0
-	it.cursor = uint64(start + len(entries))
-
-	// Mark done if we've consumed all hashes
-	if start+len(entries) >= len(hashes) {
+	it.cursor = uint64(start + len(matches))
+	if exhausted {
 		it.done = true
 	}
 
