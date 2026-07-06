@@ -2,14 +2,13 @@
 package store
 
 import (
-	"fmt"
+	"hash/maphash"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
-	"github.com/OrlovEvgeny/go-mcache/internal/hash"
 	"github.com/OrlovEvgeny/go-mcache/internal/prefetch"
 )
 
@@ -53,6 +52,7 @@ type ShardedStore[K comparable, V any] struct {
 	shardMask uint64
 	size      atomic.Int64
 	hasher    func(K) uint64
+	seed      maphash.Seed
 }
 
 // NewShardedStore creates a new sharded store.
@@ -67,6 +67,7 @@ func NewShardedStore[K comparable, V any](shardCount int, hasher func(K) uint64)
 		shards:    make([]*shard[K, V], shardCount),
 		shardMask: uint64(shardCount - 1),
 		hasher:    hasher,
+		seed:      maphash.MakeSeed(),
 	}
 
 	for i := range s.shards {
@@ -96,44 +97,13 @@ func (s *ShardedStore[K, V]) getShard(keyHash uint64) *shard[K, V] {
 }
 
 // getKeyHash computes the hash for a key.
+// The default hasher is the runtime's seeded maphash: it covers every
+// comparable key type without boxing or allocation and resists hash flooding.
 func (s *ShardedStore[K, V]) getKeyHash(key K) uint64 {
 	if s.hasher != nil {
 		return s.hasher(key)
 	}
-	// Default hasher for common types
-	return defaultHash(key)
-}
-
-// defaultHash provides default hashing for common types.
-func defaultHash[K comparable](key K) uint64 {
-	switch k := any(key).(type) {
-	case string:
-		return hash.String(k)
-	case int:
-		return hash.Int(k)
-	case int64:
-		return hash.Int64(k)
-	case uint64:
-		return hash.Uint64(k)
-	case int32:
-		return hash.Int32(k)
-	case uint32:
-		return hash.Uint32(k)
-	default:
-		// Fallback: use fmt.Sprint and hash
-		// This is slow but works for any comparable type
-		return hash.String(anyToString(key))
-	}
-}
-
-// anyToString converts any value to string for hashing.
-func anyToString[K comparable](key K) string {
-	switch k := any(key).(type) {
-	case string:
-		return k
-	default:
-		return fmt.Sprintf("%v", key)
-	}
+	return maphash.Comparable(s.seed, key)
 }
 
 // Get retrieves an entry by key.
@@ -182,18 +152,6 @@ func (s *ShardedStore[K, V]) GetByHash(key K, keyHash uint64) (*Entry[K, V], boo
 	}
 
 	return entry, true
-}
-
-// PeekByHash retrieves an entry by key when hash is already known without
-// applying expiration checks or statistics updates.
-func (s *ShardedStore[K, V]) PeekByHash(key K, keyHash uint64) (*Entry[K, V], bool) {
-	sh := s.getShard(keyHash)
-
-	sh.mu.RLock()
-	entry, exists := sh.m[key]
-	sh.mu.RUnlock()
-
-	return entry, exists
 }
 
 // Set stores an entry.
@@ -253,45 +211,6 @@ func (s *ShardedStore[K, V]) DeleteByHash(key K, keyHash uint64) *Entry[K, V] {
 	}
 
 	return entry
-}
-
-// UpdateExistingByHash replaces an existing entry with a fresh snapshot.
-// Stored entries are treated as immutable after publication so readers can
-// safely access them after releasing the shard read lock.
-// Returns the previous entry snapshot only when capturePrevious is true.
-func (s *ShardedStore[K, V]) UpdateExistingByHash(
-	key K,
-	keyHash uint64,
-	value V,
-	cost int64,
-	expireAt int64,
-	capturePrevious bool,
-) (prev *Entry[K, V], updated bool, costDelta int64, oldExpireAt int64) {
-	sh := s.getShard(keyHash)
-
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-
-	entry, exists := sh.m[key]
-	if !exists {
-		return nil, false, 0, 0
-	}
-
-	if capturePrevious {
-		snapshot := *entry
-		prev = &snapshot
-	}
-
-	oldExpireAt = entry.ExpireAt
-	costDelta = cost - entry.Cost
-	sh.m[key] = &Entry[K, V]{
-		Key:      entry.Key,
-		Value:    value,
-		KeyHash:  entry.KeyHash,
-		ExpireAt: expireAt,
-		Cost:     cost,
-	}
-	return prev, true, costDelta, oldExpireAt
 }
 
 // Has checks if a key exists and is not expired.

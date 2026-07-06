@@ -8,11 +8,16 @@ import (
 )
 
 // RingBuffer is a lock-free MPSC (Multi-Producer Single-Consumer) ring buffer.
+// head and tail live on separate cache lines: the consumer's head updates
+// would otherwise invalidate the line producers CAS tail on, and vice versa.
 type RingBuffer[T any] struct {
 	data []node[T]
 	mask uint64
+	_    [32]byte      // pad data+mask to a full cache line
 	head atomic.Uint64 // Consumer reads from head
+	_    [56]byte
 	tail atomic.Uint64 // Producers write to tail
+	_    [56]byte
 }
 
 type node[T any] struct {

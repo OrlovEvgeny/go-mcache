@@ -10,6 +10,7 @@ import (
 // It prevents incrementing counters for items that haven't been seen before.
 type bloomFilterLockFree struct {
 	bits    []atomic.Uint64
+	bitMask uint64 // numBits-1, numBits is a power of two
 	numBits uint64
 	numHash int
 }
@@ -31,8 +32,8 @@ func newBloomFilterLockFree(n int64, fpRate float64) *bloomFilterLockFree {
 		numBits = 64
 	}
 
-	// Round up to multiple of 64
-	numBits = ((numBits + 63) / 64) * 64
+	// Round up to a power of two so index() can mask instead of dividing.
+	numBits = nextPow2(numBits)
 
 	// Calculate optimal number of hash functions: k = (m/n) * ln(2)
 	numHash := int(float64(numBits) / float64(n) * math.Ln2)
@@ -45,6 +46,7 @@ func newBloomFilterLockFree(n int64, fpRate float64) *bloomFilterLockFree {
 
 	return &bloomFilterLockFree{
 		bits:    make([]atomic.Uint64, numBits/64),
+		bitMask: numBits - 1,
 		numBits: numBits,
 		numHash: numHash,
 	}
@@ -104,7 +106,7 @@ func (bf *bloomFilterLockFree) index(keyHash uint64, i int) uint64 {
 	h2 := (keyHash >> 32) | (keyHash << 32)
 	// Enhanced double hashing with quadratic term for better distribution
 	h := h1 + uint64(i)*h2 + uint64(i*i)
-	return h % bf.numBits
+	return h & bf.bitMask
 }
 
 // Reset clears the bloom filter.

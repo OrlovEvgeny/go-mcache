@@ -4,14 +4,29 @@ import (
 	"sync/atomic"
 )
 
+// incrStripes is the number of stripes for the increment counter.
+// Must be a power of two.
+const incrStripes = 64
+
+// paddedCounter is an atomic counter padded to a cache line to prevent
+// false sharing between adjacent stripes.
+type paddedCounter struct {
+	v atomic.Int64
+	_ [56]byte
+}
+
 // TinyLFULockFree implements a lock-free TinyLFU admission policy.
 // It uses a lock-free Count-Min Sketch for frequency estimation and a lock-free
 // bloom filter as a doorkeeper to avoid counting items that are only seen once.
 type TinyLFULockFree struct {
-	freq    *cmSketchLockFree
-	door    *bloomFilterLockFree
-	incrs   atomic.Int64 // Number of increments
-	resetAt int64        // Reset threshold
+	freq *cmSketchLockFree
+	door *bloomFilterLockFree
+
+	// incrs is striped by key hash: a single shared counter would turn
+	// every access into a CAS on one cache line shared by all cores.
+	incrs     [incrStripes]paddedCounter
+	resetAt   int64 // Reset threshold
+	resetting atomic.Bool
 }
 
 // NewTinyLFULockFree creates a new lock-free TinyLFU admission policy.
@@ -38,16 +53,40 @@ func (t *TinyLFULockFree) Increment(keyHash uint64) {
 		t.freq.Increment(keyHash)
 	}
 
-	// Atomic increment and check for reset
-	incrs := t.incrs.Add(1)
+	t.countIncrement(keyHash, 1)
+}
 
-	// Check if we need to reset (aging)
-	// Use a simple threshold check - slight over-counting is acceptable
-	if incrs >= t.resetAt {
-		// Try to claim the reset operation
-		if t.incrs.CompareAndSwap(incrs, 0) {
-			t.reset()
-		}
+// countIncrement adds n to the striped increment counter and occasionally
+// checks whether the aging reset threshold has been reached.
+func (t *TinyLFULockFree) countIncrement(keyHash uint64, n int64) {
+	stripe := t.incrs[keyHash&(incrStripes-1)].v.Add(n)
+
+	// Amortize the reset check: summing all stripes on every increment
+	// would defeat the striping, so only check every 256th increment
+	// of the local stripe.
+	if stripe&0xFF == 0 {
+		t.maybeReset()
+	}
+}
+
+// maybeReset performs the aging reset when the total increment count has
+// reached the threshold. At most one goroutine resets at a time; the check
+// is approximate, which is acceptable for a probabilistic sketch.
+func (t *TinyLFULockFree) maybeReset() {
+	if t.NumIncrements() < t.resetAt {
+		return
+	}
+	if !t.resetting.CompareAndSwap(false, true) {
+		return
+	}
+	defer t.resetting.Store(false)
+
+	if t.NumIncrements() < t.resetAt {
+		return
+	}
+	t.reset()
+	for i := range t.incrs {
+		t.incrs[i].v.Store(0)
 	}
 }
 
@@ -85,7 +124,9 @@ func (t *TinyLFULockFree) reset() {
 func (t *TinyLFULockFree) Clear() {
 	t.freq.Clear()
 	t.door.Reset()
-	t.incrs.Store(0)
+	for i := range t.incrs {
+		t.incrs[i].v.Store(0)
+	}
 }
 
 // IncrementBatch records accesses for multiple keys.
@@ -98,27 +139,8 @@ func (t *TinyLFULockFree) IncrementBatch(keyHashes []uint64) {
 		}
 	}
 
-	// Batch update the counter
-	incrs := t.incrs.Add(int64(len(keyHashes)))
-
-	// Check if we need to reset
-	if incrs >= t.resetAt {
-		if t.incrs.CompareAndSwap(incrs, 0) {
-			t.reset()
-		}
-	}
-}
-
-// EstimateBatch returns estimated frequencies for multiple keys.
-func (t *TinyLFULockFree) EstimateBatch(keyHashes []uint64, results []int64) {
-	for i, keyHash := range keyHashes {
-		if i < len(results) {
-			estimate := t.freq.Estimate(keyHash)
-			if t.door.Contains(keyHash) {
-				estimate++
-			}
-			results[i] = estimate
-		}
+	if len(keyHashes) > 0 {
+		t.countIncrement(keyHashes[0], int64(len(keyHashes)))
 	}
 }
 
@@ -131,5 +153,9 @@ func (t *TinyLFULockFree) FillRatio() float64 {
 // NumIncrements returns the current increment counter.
 // Useful for monitoring.
 func (t *TinyLFULockFree) NumIncrements() int64 {
-	return t.incrs.Load()
+	var total int64
+	for i := range t.incrs {
+		total += t.incrs[i].v.Load()
+	}
+	return total
 }

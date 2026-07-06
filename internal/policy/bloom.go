@@ -1,16 +1,15 @@
 package policy
 
-import (
-	"sync"
-)
-
 // bloomFilter is a simple bloom filter used as a doorkeeper for TinyLFU.
 // It prevents incrementing counters for items that haven't been seen before.
+//
+// bloomFilter is NOT thread-safe: every access goes through the owning
+// TinyLFU, which serializes callers with its own mutex.
 type bloomFilter struct {
 	bits    []uint64
+	bitMask uint64 // numBits-1, numBits is a power of two
 	numBits uint64
 	numHash int
-	mu      sync.RWMutex
 }
 
 // newBloomFilter creates a new bloom filter with approximately n items capacity
@@ -30,8 +29,8 @@ func newBloomFilter(n int64, fpRate float64) *bloomFilter {
 		numBits = 64
 	}
 
-	// Round up to multiple of 64
-	numBits = ((numBits + 63) / 64) * 64
+	// Round up to a power of two so index() can mask instead of dividing.
+	numBits = nextPow2(numBits)
 
 	// Calculate optimal number of hash functions: k = (m/n) * ln(2)
 	// Simplified: k ≈ 7 for 1% false positive
@@ -39,17 +38,28 @@ func newBloomFilter(n int64, fpRate float64) *bloomFilter {
 
 	return &bloomFilter{
 		bits:    make([]uint64, numBits/64),
+		bitMask: numBits - 1,
 		numBits: numBits,
 		numHash: numHash,
 	}
 }
 
+// nextPow2 returns the smallest power of two >= v (v must be >= 1).
+func nextPow2(v uint64) uint64 {
+	v--
+	v |= v >> 1
+	v |= v >> 2
+	v |= v >> 4
+	v |= v >> 8
+	v |= v >> 16
+	v |= v >> 32
+	v++
+	return v
+}
+
 // Add adds a key hash to the filter.
 // Returns true if the key was already present (may be false positive).
 func (bf *bloomFilter) Add(keyHash uint64) bool {
-	bf.mu.Lock()
-	defer bf.mu.Unlock()
-
 	alreadyPresent := true
 	for i := 0; i < bf.numHash; i++ {
 		idx := bf.index(keyHash, i)
@@ -67,9 +77,6 @@ func (bf *bloomFilter) Add(keyHash uint64) bool {
 
 // Contains checks if a key hash might be in the filter.
 func (bf *bloomFilter) Contains(keyHash uint64) bool {
-	bf.mu.RLock()
-	defer bf.mu.RUnlock()
-
 	for i := 0; i < bf.numHash; i++ {
 		idx := bf.index(keyHash, i)
 		wordIdx := idx / 64
@@ -89,14 +96,11 @@ func (bf *bloomFilter) index(keyHash uint64, i int) uint64 {
 	h1 := keyHash
 	h2 := (keyHash >> 32) | (keyHash << 32)
 	h := h1 + uint64(i)*h2
-	return h % bf.numBits
+	return h & bf.bitMask
 }
 
 // Reset clears the bloom filter.
 func (bf *bloomFilter) Reset() {
-	bf.mu.Lock()
-	defer bf.mu.Unlock()
-
 	for i := range bf.bits {
 		bf.bits[i] = 0
 	}
@@ -104,9 +108,6 @@ func (bf *bloomFilter) Reset() {
 
 // FillRatio returns the ratio of set bits to total bits.
 func (bf *bloomFilter) FillRatio() float64 {
-	bf.mu.RLock()
-	defer bf.mu.RUnlock()
-
 	count := 0
 	for _, word := range bf.bits {
 		count += popcount(word)

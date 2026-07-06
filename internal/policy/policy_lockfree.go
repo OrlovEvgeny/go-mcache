@@ -53,8 +53,9 @@ func (p *PolicyLockFree[K]) Add(key K, keyHash uint64, cost int64) (victims []Vi
 
 // findVictimsLocked finds victims to evict to make room for a new item.
 // Must be called with p.mu held.
+// Returns nil without allocating when no eviction is needed.
 func (p *PolicyLockFree[K]) findVictimsLocked(incomingHash uint64, cost int64) []Victim[K] {
-	victims := make([]Victim[K], 0, 8)
+	var victims []Victim[K]
 
 	for p.evict.NeedsEviction() {
 		sample := p.evict.Sample()
@@ -117,11 +118,15 @@ func (p *PolicyLockFree[K]) Update(key K, keyHash uint64, cost int64) {
 
 // Cost returns the current total cost.
 func (p *PolicyLockFree[K]) Cost() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.evict.UsedCost()
 }
 
 // NumEntries returns the current number of entries.
 func (p *PolicyLockFree[K]) NumEntries() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.evict.NumEntries()
 }
 
@@ -135,11 +140,15 @@ func (p *PolicyLockFree[K]) Clear() {
 
 // SetMaxCost updates the maximum cost limit.
 func (p *PolicyLockFree[K]) SetMaxCost(maxCost int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.evict.SetMaxCost(maxCost)
 }
 
 // SetMaxEntries updates the maximum entries limit.
 func (p *PolicyLockFree[K]) SetMaxEntries(maxEntries int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.evict.SetMaxEntries(maxEntries)
 }
 

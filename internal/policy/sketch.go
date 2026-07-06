@@ -3,7 +3,6 @@ package policy
 
 import (
 	"math/rand"
-	"sync"
 )
 
 const (
@@ -16,10 +15,12 @@ const (
 
 // cmSketch is a Count-Min Sketch for frequency estimation.
 // Uses 4-bit counters (0-15) packed into bytes.
+//
+// cmSketch is NOT thread-safe: every access goes through the owning
+// TinyLFU, which serializes callers with its own mutex.
 type cmSketch struct {
 	rows  [cmDepth][]byte
 	seeds [cmDepth]uint64
-	mu    sync.RWMutex
 	width uint64
 }
 
@@ -51,9 +52,6 @@ func newCMSketch(width int64) *cmSketch {
 
 // Increment increments the frequency counter for the given hash.
 func (s *cmSketch) Increment(keyHash uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	for i := 0; i < cmDepth; i++ {
 		idx := s.index(keyHash, i)
 		s.incrementAt(i, idx)
@@ -62,9 +60,6 @@ func (s *cmSketch) Increment(keyHash uint64) {
 
 // Estimate returns the estimated frequency for the given hash.
 func (s *cmSketch) Estimate(keyHash uint64) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	min := int64(15) // Max value for 4-bit counter
 	for i := 0; i < cmDepth; i++ {
 		idx := s.index(keyHash, i)
@@ -126,9 +121,6 @@ func (s *cmSketch) getAt(row int, idx uint64) uint8 {
 
 // Reset halves all counters (aging mechanism).
 func (s *cmSketch) Reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	for i := 0; i < cmDepth; i++ {
 		for j := range s.rows[i] {
 			// Halve both nibbles
@@ -142,9 +134,6 @@ func (s *cmSketch) Reset() {
 
 // Clear resets all counters to zero.
 func (s *cmSketch) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	for i := 0; i < cmDepth; i++ {
 		for j := range s.rows[i] {
 			s.rows[i][j] = 0

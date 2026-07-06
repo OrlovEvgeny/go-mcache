@@ -2,16 +2,13 @@ package mcache
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/buffer"
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
 	"github.com/OrlovEvgeny/go-mcache/internal/glob"
-	"github.com/OrlovEvgeny/go-mcache/internal/hash"
 	"github.com/OrlovEvgeny/go-mcache/internal/policy"
 	"github.com/OrlovEvgeny/go-mcache/internal/radix"
 	"github.com/OrlovEvgeny/go-mcache/internal/store"
@@ -49,8 +46,10 @@ type Cache[K comparable, V any] struct {
 
 // writeItem represents a pending write operation.
 type writeItem[K comparable, V any] struct {
-	entry *store.Entry[K, V]
-	isSet bool // true = set, false = delete
+	entry   *store.Entry[K, V] // non-nil for set operations
+	key     K                  // delete target when entry is nil
+	keyHash uint64
+	isSet   bool // true = set, false = delete
 }
 
 // NewCache creates a new generic Cache with the given options.
@@ -71,12 +70,17 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create policy based on configuration
+	// Create policy based on configuration.
+	// Without size/cost limits there is nothing to admit or evict, so no
+	// policy is created at all: this keeps the unbounded cache from paying
+	// TinyLFU updates and from tracking a second copy of every key.
 	var pol policy.Policer[K]
-	if cfg.UseLockFreePolicy {
-		pol = policy.NewPolicyLockFree[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
-	} else {
-		pol = policy.NewPolicy[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
+	if cfg.MaxEntries > 0 || cfg.MaxCost > 0 {
+		if cfg.UseLockFreePolicy {
+			pol = policy.NewPolicyLockFree[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
+		} else {
+			pol = policy.NewPolicy[K](cfg.NumCounters, cfg.MaxCost, cfg.MaxEntries)
+		}
 	}
 
 	c := &Cache[K, V]{
@@ -101,12 +105,15 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 		}
 	}
 
-	// Setup write buffer if buffering is enabled
+	// Setup write buffer if buffering is enabled.
+	// Flushing is driven by batch-size signals; the interval is only a
+	// fallback so an idle buffer doesn't wake the flush goroutine
+	// tens of thousands of times per second.
 	if cfg.BufferItems > 0 {
 		c.writeBuffer = buffer.NewWriteBuffer[writeItem[K, V]](
 			int(cfg.BufferItems*2),
 			int(cfg.BufferItems),
-			10*time.Microsecond,
+			time.Millisecond,
 			c.processWriteBatch,
 		)
 	}
@@ -114,7 +121,7 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 		c.readBuffer = buffer.NewLossyBuffer[uint64](
 			1024,
 			64,
-			50*time.Microsecond,
+			time.Millisecond,
 			c.processReadBatch,
 		)
 	}
@@ -180,62 +187,54 @@ func (c *Cache[K, V]) SetWithCost(key K, value V, cost int64, ttl time.Duration)
 		expireAt = clock.NowNano() + int64(ttl)
 	}
 
-	keyHash := c.store.KeyHash(key)
-
-	if c.writeBuffer != nil {
-		entry := &store.Entry[K, V]{
-			Key:      key,
-			Value:    value,
-			KeyHash:  keyHash,
-			ExpireAt: expireAt,
-			Cost:     cost,
-		}
-		// Buffered write with synchronous fallback on buffer saturation
-		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true}) {
-			c.metrics.incBufferDrop()
-			return c.setSync(key, value, keyHash, cost, expireAt)
-		}
-		return true
-	}
-
-	return c.setSync(key, value, keyHash, cost, expireAt)
-}
-
-func (c *Cache[K, V]) setSync(key K, value V, keyHash uint64, cost int64, expireAt int64) bool {
-	if c.tryUpdateExisting(key, value, keyHash, cost, expireAt) {
-		return true
-	}
-
 	entry := &store.Entry[K, V]{
 		Key:      key,
 		Value:    value,
-		KeyHash:  keyHash,
+		KeyHash:  c.store.KeyHash(key),
 		ExpireAt: expireAt,
 		Cost:     cost,
 	}
-	return c.doSet(entry)
-}
 
-// doSet performs the actual set operation for new entries.
-func (c *Cache[K, V]) doSet(entry *store.Entry[K, V]) bool {
-	// Check admission policy and get victims to evict
-	victims, added := c.policy.Add(entry.Key, entry.KeyHash, entry.Cost)
-	if !added {
-		c.metrics.incRejection()
-		if c.config.OnReject != nil {
-			c.config.OnReject(entry.Key, entry.Value)
+	if c.writeBuffer != nil {
+		// Buffered write with synchronous fallback on buffer saturation
+		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: true}) {
+			c.metrics.incBufferDrop()
+			return c.setSync(entry)
 		}
-		return false
+		return true
 	}
 
-	// Evict victims by exact key (no hash-based reverse lookup needed)
-	for _, victim := range victims {
-		c.evictVictim(victim)
+	return c.setSync(entry)
+}
+
+// setSync inserts or replaces an entry under a single shard lock.
+// The admission policy distinguishes inserts from updates internally,
+// and store.Set returns the previous entry for cost reconciliation.
+func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
+	if c.policy != nil {
+		// Check admission policy and get victims to evict
+		victims, added := c.policy.Add(entry.Key, entry.KeyHash, entry.Cost)
+		if !added {
+			c.metrics.incRejection()
+			if c.config.OnReject != nil {
+				c.config.OnReject(entry.Key, entry.Value)
+			}
+			return false
+		}
+
+		// Evict victims by exact key (no hash-based reverse lookup needed)
+		for _, victim := range victims {
+			c.evictVictim(victim)
+		}
 	}
 
 	// Store the entry
 	prev := c.store.Set(entry)
-	c.liveCost.Add(entry.Cost)
+	if prev != nil {
+		c.liveCost.Add(entry.Cost - prev.Cost)
+	} else {
+		c.liveCost.Add(entry.Cost)
+	}
 
 	// Schedule background expiration if entry has TTL.
 	if entry.ExpireAt > 0 {
@@ -296,9 +295,7 @@ func (c *Cache[K, V]) Delete(key K) bool {
 
 	if c.writeBuffer != nil {
 		// Buffered delete with synchronous fallback on buffer saturation
-		var zero V
-		entry := &store.Entry[K, V]{Key: key, KeyHash: keyHash, Value: zero}
-		if !c.writeBuffer.Push(writeItem[K, V]{entry: entry, isSet: false}) {
+		if !c.writeBuffer.Push(writeItem[K, V]{key: key, keyHash: keyHash}) {
 			c.metrics.incBufferDrop()
 			return c.doDelete(key, keyHash)
 		}
@@ -317,7 +314,9 @@ func (c *Cache[K, V]) doDelete(key K, keyHash uint64) bool {
 	c.liveCost.Add(-deleted.Cost)
 
 	// Remove from policy
-	c.policy.Del(key, keyHash)
+	if c.policy != nil {
+		c.policy.Del(key, keyHash)
+	}
 
 	// Remove from radix tree
 	if c.isStringKey && c.radixTree != nil {
@@ -542,7 +541,9 @@ func (c *Cache[K, V]) Clear() {
 	c.clearMu.Lock()
 	defer c.clearMu.Unlock()
 	c.store.Clear()
-	c.policy.Clear()
+	if c.policy != nil {
+		c.policy.Clear()
+	}
 	c.expiryWheel.Clear()
 	if c.radixTree != nil {
 		c.radixTree.Clear()
@@ -573,16 +574,16 @@ func (c *Cache[K, V]) Close() {
 func (c *Cache[K, V]) processWriteBatch(items []writeItem[K, V]) {
 	for _, item := range items {
 		if item.isSet {
-			c.setSync(item.entry.Key, item.entry.Value, item.entry.KeyHash, item.entry.Cost, item.entry.ExpireAt)
+			c.setSync(item.entry)
 		} else {
-			c.doDelete(item.entry.Key, item.entry.KeyHash)
+			c.doDelete(item.key, item.keyHash)
 		}
 	}
 }
 
 // processReadBatch replays access events in batches.
 func (c *Cache[K, V]) processReadBatch(items []uint64) {
-	if len(items) == 0 {
+	if len(items) == 0 || c.policy == nil {
 		return
 	}
 	if batcher, ok := c.policy.(interface{ AccessBatch([]uint64) }); ok {
@@ -626,7 +627,9 @@ func (c *Cache[K, V]) removeExpired() {
 			continue
 		}
 		c.liveCost.Add(-entry.Cost)
-		c.policy.Del(entry.Key, entry.KeyHash)
+		if c.policy != nil {
+			c.policy.Del(entry.Key, entry.KeyHash)
+		}
 
 		if c.isStringKey && c.radixTree != nil {
 			if strKey, ok := any(item.Key).(string); ok {
@@ -654,7 +657,7 @@ func (c *Cache[K, V]) recordAccess(keyHash uint64) {
 }
 
 func (c *Cache[K, V]) shouldTrackAccess() bool {
-	if c.config.MaxEntries <= 0 && c.config.MaxCost <= 0 {
+	if c.policy == nil {
 		return false
 	}
 	if c.config.MaxEntries > 0 && int64(c.store.Len()) >= c.config.MaxEntries/2 {
@@ -666,80 +669,3 @@ func (c *Cache[K, V]) shouldTrackAccess() bool {
 	return false
 }
 
-func (c *Cache[K, V]) tryUpdateExisting(key K, value V, keyHash uint64, cost int64, expireAt int64) bool {
-	if _, ok := c.store.PeekByHash(key, keyHash); !ok {
-		return false
-	}
-
-	prev, updated, costDelta, _ := c.store.UpdateExistingByHash(
-		key,
-		keyHash,
-		value,
-		cost,
-		expireAt,
-		c.config.OnEvict != nil,
-	)
-	if !updated {
-		return false
-	}
-
-	if costDelta != 0 {
-		c.liveCost.Add(costDelta)
-		c.policy.Update(key, keyHash, cost)
-	}
-	if expireAt > 0 {
-		c.expiryWheel.Schedule(key, keyHash, expireAt)
-	}
-
-	c.metrics.incSet()
-	c.metrics.addCost(cost)
-
-	if prev != nil && c.config.OnEvict != nil {
-		c.config.OnEvict(prev.Key, prev.Value, prev.Cost)
-	}
-
-	return true
-}
-
-// defaultKeyHasher returns the default hasher for a key type.
-func defaultKeyHasher[K comparable](key K) uint64 {
-	switch k := any(key).(type) {
-	case string:
-		return hash.String(k)
-	case int:
-		return hash.Int(k)
-	case int8:
-		return hash.Int(int(k))
-	case int16:
-		return hash.Int(int(k))
-	case int32:
-		return hash.Int32(k)
-	case int64:
-		return hash.Int64(k)
-	case uint:
-		return hash.Uint64(uint64(k))
-	case uint8:
-		return hash.Uint64(uint64(k))
-	case uint16:
-		return hash.Uint64(uint64(k))
-	case uint32:
-		return hash.Uint32(k)
-	case uint64:
-		return hash.Uint64(k)
-	case float32:
-		return hash.Uint32(*(*uint32)(unsafe.Pointer(&k)))
-	case float64:
-		return hash.Uint64(*(*uint64)(unsafe.Pointer(&k)))
-	case bool:
-		if k {
-			return hash.Uint64(1)
-		}
-		return hash.Uint64(0)
-	case uintptr:
-		return hash.Uint64(uint64(k))
-	default:
-		// Fallback for unknown types — slow path with allocation.
-		s := fmt.Sprintf("%v", key)
-		return hash.String(s)
-	}
-}
