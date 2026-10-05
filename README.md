@@ -48,7 +48,7 @@ Entries with TTL are scheduled into a coarse timing wheel for best-effort backgr
 go get github.com/OrlovEvgeny/go-mcache
 ```
 
-Requires Go 1.26+
+Requires Go 1.27+
 
 ## Usage
 

@@ -1,6 +1,6 @@
 module github.com/OrlovEvgeny/go-mcache
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/Yiling-J/theine-go v0.6.2
