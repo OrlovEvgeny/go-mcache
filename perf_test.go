@@ -147,3 +147,15 @@ func TestExpirationCallbackCanReenter(t *testing.T) {
 		t.Fatal(v, ok)
 	}
 }
+
+func TestBatchHashesOnce(t *testing.T) {
+	calls := 0
+	c := NewCache[int, int](WithKeyHasher[int, int](func(k int) uint64 { calls++; return uint64(k) }))
+	defer c.Close()
+	c.Set(1, 7, 0)
+	calls = 0
+	r := c.GetBatchOptimized([]int{1, 2, 1})
+	if calls != 3 || !r.Found[0] || r.Found[1] || !r.Found[2] {
+		t.Fatalf("hash calls=%d result=%+v", calls, r)
+	}
+}
