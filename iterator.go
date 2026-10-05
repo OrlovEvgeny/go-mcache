@@ -73,7 +73,7 @@ func (it *Iterator[K, V]) Next() bool {
 	// Need to fetch next page?
 	if it.pos >= len(it.page) {
 		// If scan already completed, no more pages to fetch
-		if it.done {
+		if it.done && len(it.buffer) == 0 {
 			return false
 		}
 		if !it.fetchPage() {
@@ -92,7 +92,7 @@ func (it *Iterator[K, V]) fetchPage() bool {
 		return false
 	}
 
-	if it.done {
+	if it.done && len(it.buffer) == 0 {
 		return false
 	}
 
