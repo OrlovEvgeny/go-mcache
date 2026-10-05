@@ -1,134 +1,220 @@
 package store
 
 import (
-	"sync"
 	"time"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
+	"github.com/RoaringBitmap/roaring/v2"
 )
 
 const defaultExpiryWheelBuckets = 4096
 
-// ExpiryWheelEntry is a scheduled expiration event.
-type ExpiryWheelEntry[K comparable] struct {
-	Key      K
-	KeyHash  uint64
-	ExpireAt int64
+// expiryWheel belongs to one storage shard. Every access, including bitmap
+// iteration, requires that shard's write lock. Entries are immutable; slots
+// refer only to the currently published TTL entry, never to an update history.
+type expiryWheel[K comparable, V any] struct {
+	resolution    int64
+	currentTick   int64
+	ids           map[K]uint32
+	entries       []*Entry[K, V]
+	free          []uint32
+	slots         []uint16
+	buckets       map[uint16]*roaring.Bitmap
+	first         roaring.Bitmap
+	firstSlot     uint16
+	inlineEntries [16]*Entry[K, V]
+	inlineSlots   [16]uint16
 }
 
-// wheelBucket holds the entries scheduled for one tick slot.
-type wheelBucket[K comparable] struct {
-	mu    sync.Mutex
-	items []ExpiryWheelEntry[K]
+func newExpiryWheel[K comparable, V any](resolution int64) *expiryWheel[K, V] {
+	w := &expiryWheel[K, V]{resolution: resolution, currentTick: clock.NowNano() / resolution}
+	w.entries = w.inlineEntries[:0]
+	w.slots = w.inlineSlots[:0]
+	return w
 }
 
-// ExpiryWheel is a coarse hashed timing wheel for best-effort background
-// expiration. Exact TTL enforcement still happens on reads.
-//
-// Locking is per bucket: a Schedule only touches the slot its tick maps to,
-// so concurrent TTL writes across shards don't serialize on one wheel-wide
-// mutex. Advance is serialized separately and takes one bucket at a time.
-type ExpiryWheel[K comparable] struct {
-	resolution int64
-	mask       uint64
-
-	advanceMu   sync.Mutex // serializes Advance/Clear; guards currentTick
-	currentTick int64
-
-	buckets []wheelBucket[K]
+// The common case has one active deadline bucket. Embed it to avoid a map
+// and bitmap allocation per small shard; allocate the map only on divergence.
+func (w *expiryWheel[K, V]) bucket(slot uint16) *roaring.Bitmap {
+	if slot == w.firstSlot {
+		return &w.first
+	}
+	return w.buckets[slot]
+}
+func (w *expiryWheel[K, V]) ensureBucket(slot uint16) *roaring.Bitmap {
+	if b := w.bucket(slot); b != nil {
+		return b
+	}
+	if w.first.IsEmpty() {
+		w.firstSlot = slot
+		return &w.first
+	}
+	if w.buckets == nil {
+		w.buckets = make(map[uint16]*roaring.Bitmap)
+	}
+	b := roaring.New()
+	w.buckets[slot] = b
+	return b
 }
 
-// NewExpiryWheel creates a timing wheel with the provided resolution.
-func NewExpiryWheel[K comparable](resolution time.Duration) *ExpiryWheel[K] {
+// Schedule on the first tick strictly after the deadline: reads expire only
+// when now > deadline. Division before addition also avoids int64 overflow.
+func (w *expiryWheel[K, V]) slot(deadline int64) uint16 {
+	tick := deadline/w.resolution + 1
+	if tick <= w.currentTick {
+		tick = w.currentTick + 1
+	}
+	return uint16(uint64(tick) & (defaultExpiryWheelBuckets - 1))
+}
+
+func (w *expiryWheel[K, V]) removeFromBucket(id uint32) {
+	slot := w.slots[id]
+	b := w.bucket(slot)
+	if b != nil {
+		b.Remove(id)
+		if b.IsEmpty() {
+			delete(w.buckets, slot)
+		}
+	}
+}
+
+// Small shards avoid a second map allocation and its retained capacity.
+// Larger registries switch to exact-key lookup once linear search would grow.
+func (w *expiryWheel[K, V]) find(key K) (uint32, bool) {
+	if w.ids != nil {
+		id, ok := w.ids[key]
+		return id, ok
+	}
+	for i, e := range w.entries {
+		if e != nil && e.Key == key {
+			return uint32(i), true
+		}
+	}
+	return 0, false
+}
+
+func (w *expiryWheel[K, V]) set(entry *Entry[K, V]) {
+	id, ok := w.find(entry.Key)
+	if ok {
+		if w.slots[id] == w.slot(entry.ExpireAt) {
+			w.entries[id] = entry
+			return
+		}
+		w.removeFromBucket(id)
+	} else {
+		if n := len(w.free); n > 0 {
+			id = w.free[n-1]
+			w.free = w.free[:n-1]
+		} else {
+			// A shard cannot hold more than 2^32 simultaneously live TTL entries.
+			if uint64(len(w.entries)) >= 1<<32 {
+				panic("mcache: ttl identifier space exhausted")
+			}
+			id = uint32(len(w.entries))
+			w.entries = append(w.entries, nil)
+			w.slots = append(w.slots, 0)
+		}
+		if w.ids != nil {
+			w.ids[entry.Key] = id
+		} else if len(w.entries) > 32 {
+			w.ids = make(map[K]uint32, len(w.entries))
+			for i, e := range w.entries {
+				if e != nil {
+					w.ids[e.Key] = uint32(i)
+				}
+			}
+			w.ids[entry.Key] = id
+		}
+	}
+	w.entries[id] = entry
+	slot := w.slot(entry.ExpireAt)
+	w.slots[id] = slot
+	b := w.ensureBucket(slot)
+	b.Add(id)
+}
+
+func (w *expiryWheel[K, V]) remove(key K) {
+	id, ok := w.find(key)
+	if !ok {
+		return
+	}
+	w.removeFromBucket(id)
+	delete(w.ids, key)
+	w.entries[id] = nil
+	w.free = append(w.free, id)
+}
+
+// ConfigureExpiration must be called before the store is shared.
+func (s *ShardedStore[K, V]) ConfigureExpiration(resolution time.Duration) {
 	if resolution <= 0 {
 		resolution = 100 * time.Millisecond
 	}
+	s.expiryResolution = int64(resolution)
+}
 
-	bucketCount := defaultExpiryWheelBuckets
-	return &ExpiryWheel[K]{
-		resolution:  int64(resolution),
-		mask:        uint64(bucketCount - 1),
-		currentTick: clock.NowNano() / int64(resolution),
-		buckets:     make([]wheelBucket[K], bucketCount),
+func (s *ShardedStore[K, V]) registerTTL(sh *shard[K, V], entry *Entry[K, V]) {
+	if entry.ExpireAt > 0 {
+		if sh.expiry == nil {
+			sh.expiry = newExpiryWheel[K, V](s.expiryResolution)
+		}
+		sh.expiry.set(entry)
+	} else if sh.expiry != nil {
+		sh.expiry.remove(entry.Key)
 	}
 }
 
-// Resolution returns the configured wheel resolution.
-func (w *ExpiryWheel[K]) Resolution() time.Duration {
-	return time.Duration(w.resolution)
-}
-
-// Schedule registers a future expiration.
-func (w *ExpiryWheel[K]) Schedule(key K, keyHash uint64, expireAt int64) {
-	if expireAt <= 0 {
-		return
-	}
-
-	tick := (expireAt + w.resolution - 1) / w.resolution
-	b := &w.buckets[uint64(tick)&w.mask]
-
-	b.mu.Lock()
-	b.items = append(b.items, ExpiryWheelEntry[K]{
-		Key:      key,
-		KeyHash:  keyHash,
-		ExpireAt: expireAt,
-	})
-	b.mu.Unlock()
-}
-
-// Advance drains all buckets up to now and returns entries that are due.
-func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
-	nowTick := now / w.resolution
-
-	w.advanceMu.Lock()
-	defer w.advanceMu.Unlock()
-
-	if nowTick <= w.currentTick {
-		return nil
-	}
-
-	var expired []ExpiryWheelEntry[K]
-	for w.currentTick < nowTick {
-		w.currentTick++
-		b := &w.buckets[uint64(w.currentTick)&w.mask]
-
-		b.mu.Lock()
-		bucket := b.items
-		if len(bucket) == 0 {
-			b.mu.Unlock()
+// AdvanceExpiration removes due entries under their owner's lock. A full
+// rotation visits each bucket once, even after a long pause. Long TTL entries
+// stay in their bucket until their exact deadline is passed.
+func (s *ShardedStore[K, V]) AdvanceExpiration(now int64) []*Entry[K, V] {
+	var expired []*Entry[K, V]
+	for _, sh := range s.shards {
+		sh.mu.Lock()
+		w := sh.expiry
+		if w == nil || now/w.resolution <= w.currentTick {
+			sh.mu.Unlock()
 			continue
 		}
-		b.items = nil
-		b.mu.Unlock()
-
-		for _, item := range bucket {
-			if item.ExpireAt <= now {
-				expired = append(expired, item)
+		nowTick := now / w.resolution
+		ticks := nowTick - w.currentTick
+		if ticks > defaultExpiryWheelBuckets {
+			ticks = defaultExpiryWheelBuckets
+		}
+		for range ticks {
+			w.currentTick++
+			slot := uint16(uint64(w.currentTick) & (defaultExpiryWheelBuckets - 1))
+			b := w.bucket(slot)
+			if b == nil || b.IsEmpty() {
 				continue
 			}
-
-			// Not due yet (long TTL wrapped around) — reschedule.
-			futureTick := (item.ExpireAt + w.resolution - 1) / w.resolution
-			fb := &w.buckets[uint64(futureTick)&w.mask]
-			fb.mu.Lock()
-			fb.items = append(fb.items, item)
-			fb.mu.Unlock()
+			// Do not mutate a bitmap while iterating it.
+			var removed []uint32
+			it := b.Iterator()
+			for it.HasNext() {
+				id := it.Next()
+				entry := w.entries[id]
+				if entry.ExpireAt > 0 && now > entry.ExpireAt {
+					// The registry and store are published together under this same lock.
+					if sh.m[entry.Key] == entry {
+						delete(sh.m, entry.Key)
+						expired = append(expired, entry)
+						s.size.Add(-1)
+					}
+					delete(w.ids, entry.Key)
+					w.entries[id] = nil
+					removed = append(removed, id)
+				}
+			}
+			for _, id := range removed {
+				b.Remove(id)
+			}
+			w.free = append(w.free, removed...)
+			if b.IsEmpty() {
+				delete(w.buckets, slot)
+			}
 		}
+		w.currentTick = nowTick
+		sh.mu.Unlock()
 	}
-
 	return expired
-}
-
-// Clear removes all scheduled items and resets the current cursor.
-func (w *ExpiryWheel[K]) Clear() {
-	w.advanceMu.Lock()
-	defer w.advanceMu.Unlock()
-
-	for i := range w.buckets {
-		b := &w.buckets[i]
-		b.mu.Lock()
-		b.items = nil
-		b.mu.Unlock()
-	}
-	w.currentTick = clock.NowNano() / w.resolution
 }

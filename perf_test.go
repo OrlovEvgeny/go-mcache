@@ -122,3 +122,28 @@ func TestBatchSemantics(t *testing.T) {
 		}
 	}
 }
+
+func TestExpirationCallbackCanReenter(t *testing.T) {
+	var c *Cache[int, int]
+	var called int
+	c = NewCache[int, int](WithExpirationResolution[int, int](time.Hour), WithMetrics[int, int](true), WithOnExpire[int, int](func(k, v int) {
+		called++
+		c.Clear()
+		c.Set(k, v+1, 0)
+	}))
+	defer c.Close()
+	c.store.ConfigureExpiration(time.Nanosecond)
+	before := clock.NowNano()
+	c.store.Set(&store.Entry[int, int]{Key: 1, Value: 7, KeyHash: c.store.KeyHash(1), ExpireAt: before - 1})
+	deadline := time.Now().Add(time.Second)
+	for clock.NowNano() <= before && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	c.removeExpired()
+	if called != 1 {
+		t.Fatalf("callbacks=%d", called)
+	}
+	if v, ok := c.Get(1); !ok || v != 8 {
+		t.Fatal(v, ok)
+	}
+}
