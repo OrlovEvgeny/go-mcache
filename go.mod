@@ -3,7 +3,6 @@ module github.com/OrlovEvgeny/go-mcache
 go 1.27.0
 
 require (
-	github.com/RoaringBitmap/roaring/v2 v2.29.0
 	github.com/Yiling-J/theine-go v0.6.2
 	github.com/allegro/bigcache/v3 v3.1.0
 	github.com/coocood/freecache v1.2.7
@@ -15,12 +14,10 @@ require (
 )
 
 require (
-	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
-	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect

@@ -26,6 +26,7 @@ type Item[K comparable, V any] struct {
 type Cache[K comparable, V any] struct {
 	store       *store.ShardedStore[K, V]
 	policy      policy.Policer[K]
+	expiryWheel *store.ExpiryWheel[K]
 	radixTree   *radix.Tree // Only for string keys
 	metrics     *Metrics
 	config      *config[K, V]
@@ -85,13 +86,13 @@ func NewCache[K comparable, V any](opts ...Option[K, V]) *Cache[K, V] {
 	}
 
 	c := &Cache[K, V]{
-		store:  store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
-		policy: pol,
-		config: cfg,
-		ctx:    ctx,
-		cancel: cancel,
+		store:       store.NewShardedStore[K, V](cfg.ShardCount, cfg.KeyHasher),
+		policy:      pol,
+		expiryWheel: store.NewExpiryWheel[K](cfg.ExpiryResolution),
+		config:      cfg,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
-	c.store.ConfigureExpiration(cfg.ExpiryResolution)
 	if cfg.MetricsEnabled {
 		c.metrics = newMetrics()
 	}
@@ -227,6 +228,10 @@ func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
 			}
 		}
 
+		if entry.ExpireAt > 0 {
+			c.expiryWheel.Schedule(entry.Key, entry.KeyHash, entry.ExpireAt)
+		}
+
 		if c.config.OnEvict != nil {
 			c.config.OnEvict(prev.Key, prev.Value, prev.Cost)
 		}
@@ -261,6 +266,11 @@ func (c *Cache[K, V]) setSync(entry *store.Entry[K, V]) bool {
 		c.liveCost.Add(entry.Cost - prev.Cost)
 	} else {
 		c.liveCost.Add(entry.Cost)
+	}
+
+	// Schedule background expiration if entry has TTL.
+	if entry.ExpireAt > 0 {
+		c.expiryWheel.Schedule(entry.Key, entry.KeyHash, entry.ExpireAt)
 	}
 
 	// Update radix tree for string keys
@@ -512,6 +522,7 @@ func (c *Cache[K, V]) Clear() {
 	if c.policy != nil {
 		c.policy.Clear()
 	}
+	c.expiryWheel.Clear()
 	if c.radixTree != nil {
 		c.radixTree.Clear()
 	}
@@ -564,7 +575,7 @@ func (c *Cache[K, V]) processReadBatch(items []uint64) {
 func (c *Cache[K, V]) expirationWorker() {
 	defer c.wg.Done()
 
-	ticker := time.NewTicker(c.config.ExpiryResolution)
+	ticker := time.NewTicker(c.expiryWheel.Resolution())
 	defer ticker.Stop()
 
 	for {
@@ -577,34 +588,40 @@ func (c *Cache[K, V]) expirationWorker() {
 	}
 }
 
-// removeExpired drains shard-local timing wheels and runs callbacks after
-// releasing the storage and cleanup locks.
+// removeExpired drains the timing wheel and deletes entries lazily if their
+// stored expiration still matches the scheduled one.
 func (c *Cache[K, V]) removeExpired() {
 	c.clearMu.Lock()
 
 	now := clock.NowNano()
-	expired := c.store.AdvanceExpiration(now)
+	expired := c.expiryWheel.Advance(now)
 
-	for _, entry := range expired {
+	var removed []*store.Entry[K, V]
+	for _, item := range expired {
+		entry := c.store.DeleteIfExpired(item.Key, item.KeyHash, item.ExpireAt, now)
+		if entry == nil {
+			continue
+		}
 		c.liveCost.Add(-entry.Cost)
 		if c.policy != nil {
 			c.policy.Del(entry.Key, entry.KeyHash)
 		}
 
 		if c.isStringKey && c.radixTree != nil {
-			if strKey, ok := any(entry.Key).(string); ok {
+			if strKey, ok := any(item.Key).(string); ok {
 				c.radixTree.Delete(strKey)
 			}
 		}
 
 		c.metrics.incExpiration()
 
+		if c.config.OnExpire != nil {
+			removed = append(removed, entry)
+		}
 	}
 	c.clearMu.Unlock()
-	if c.config.OnExpire != nil {
-		for _, entry := range expired {
-			c.config.OnExpire(entry.Key, entry.Value)
-		}
+	for _, entry := range removed {
+		c.config.OnExpire(entry.Key, entry.Value)
 	}
 }
 

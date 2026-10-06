@@ -5,7 +5,6 @@ import (
 	"hash/maphash"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
@@ -38,20 +37,18 @@ func (e *Entry[K, V]) IsExpired() bool {
 // Optimized with cache line padding to prevent false sharing between shards.
 type shard[K comparable, V any] struct {
 	// Hot data: frequently accessed together
-	mu     sync.RWMutex       // 24 bytes on 64-bit
-	m      map[K]*Entry[K, V] // 8 bytes (pointer to map header)
-	expiry *expiryWheel[K, V]
-	_      [cacheLineSize - 40]byte // Pad to cache line boundary
+	mu sync.RWMutex             // 24 bytes on 64-bit
+	m  map[K]*Entry[K, V]       // 8 bytes (pointer to map header)
+	_  [cacheLineSize - 32]byte // Pad to cache line boundary
 }
 
 // ShardedStore is a sharded in-memory store.
 type ShardedStore[K comparable, V any] struct {
-	shards           []*shard[K, V]
-	shardMask        uint64
-	size             atomic.Int64
-	hasher           func(K) uint64
-	seed             maphash.Seed
-	expiryResolution int64
+	shards    []*shard[K, V]
+	shardMask uint64
+	size      atomic.Int64
+	hasher    func(K) uint64
+	seed      maphash.Seed
 }
 
 // NewShardedStore creates a new sharded store.
@@ -63,11 +60,10 @@ func NewShardedStore[K comparable, V any](shardCount int, hasher func(K) uint64)
 	shardCount = nextPowerOf2(shardCount)
 
 	s := &ShardedStore[K, V]{
-		shards:           make([]*shard[K, V], shardCount),
-		shardMask:        uint64(shardCount - 1),
-		hasher:           hasher,
-		seed:             maphash.MakeSeed(),
-		expiryResolution: int64(100 * time.Millisecond),
+		shards:    make([]*shard[K, V], shardCount),
+		shardMask: uint64(shardCount - 1),
+		hasher:    hasher,
+		seed:      maphash.MakeSeed(),
 	}
 
 	for i := range s.shards {
@@ -165,9 +161,6 @@ func (s *ShardedStore[K, V]) Update(entry *Entry[K, V]) (*Entry[K, V], bool) {
 	prev, exists := sh.m[entry.Key]
 	if exists {
 		sh.m[entry.Key] = entry
-		if prev == nil || prev.ExpireAt != entry.ExpireAt {
-			s.registerTTL(sh, entry, prev)
-		}
 	}
 	sh.mu.Unlock()
 
@@ -189,9 +182,6 @@ func (s *ShardedStore[K, V]) Set(entry *Entry[K, V]) *Entry[K, V] {
 	sh.mu.Lock()
 	prev, existed := sh.m[entry.Key]
 	sh.m[entry.Key] = entry
-	if prev == nil || prev.ExpireAt != entry.ExpireAt {
-		s.registerTTL(sh, entry, prev)
-	}
 	if !existed {
 		s.size.Add(1)
 	}
@@ -210,9 +200,6 @@ func (s *ShardedStore[K, V]) Delete(key K) *Entry[K, V] {
 	entry, existed := sh.m[key]
 	if existed {
 		delete(sh.m, key)
-		if sh.expiry != nil {
-			sh.expiry.remove(entry)
-		}
 	}
 	if existed {
 		s.size.Add(-1)
@@ -230,9 +217,6 @@ func (s *ShardedStore[K, V]) DeleteByHash(key K, keyHash uint64) *Entry[K, V] {
 	entry, existed := sh.m[key]
 	if existed {
 		delete(sh.m, key)
-		if sh.expiry != nil {
-			sh.expiry.remove(entry)
-		}
 	}
 	if existed {
 		s.size.Add(-1)
@@ -259,7 +243,6 @@ func (s *ShardedStore[K, V]) Clear() {
 		sh.mu.Lock()
 		s.size.Add(-int64(len(sh.m)))
 		sh.m = make(map[K]*Entry[K, V])
-		sh.expiry = nil
 		sh.mu.Unlock()
 	}
 }
@@ -393,9 +376,6 @@ func (s *ShardedStore[K, V]) CollectExpired(now int64) []*Entry[K, V] {
 		for key, entry := range sh.m {
 			if entry.ExpireAt > 0 && now > entry.ExpireAt {
 				delete(sh.m, key)
-				if sh.expiry != nil {
-					sh.expiry.remove(entry)
-				}
 				expired = append(expired, entry)
 				s.size.Add(-1)
 			}
@@ -414,9 +394,6 @@ func (s *ShardedStore[K, V]) DeleteIfExpired(key K, keyHash uint64, expireAt int
 	entry, exists := sh.m[key]
 	if exists && entry.ExpireAt == expireAt && entry.ExpireAt > 0 && now > entry.ExpireAt {
 		delete(sh.m, key)
-		if sh.expiry != nil {
-			sh.expiry.remove(entry)
-		}
 	} else {
 		entry = nil
 	}
