@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLRetained/rounds=1-8         	       1	   1414083 ns/op	   1322152 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1286666 ns/op	   1309856 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1132417 ns/op	   1314704 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1161125 ns/op	   1312808 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1219125 ns/op	   1312360 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1173000 ns/op	   1310976 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1174417 ns/op	   1310424 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1179167 ns/op	   1309136 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1120917 ns/op	   1311944 retained-B
+BenchmarkTTLRetained/rounds=1-8         	       1	   1183667 ns/op	   1309480 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  58671209 ns/op	  30116384 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  55799083 ns/op	  28767928 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  55255500 ns/op	  27843152 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  62099250 ns/op	  26909360 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  59145167 ns/op	  28772336 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  55512833 ns/op	  26560824 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  56774125 ns/op	  28770496 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  56864125 ns/op	  27838368 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  57529917 ns/op	  28770280 retained-B
+BenchmarkTTLRetained/rounds=100-8       	       1	  55895708 ns/op	  30647432 retained-B
+PASS

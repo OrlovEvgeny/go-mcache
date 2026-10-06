@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6596059	        53.95 ns/op	     194 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6428882	        54.27 ns/op	     192 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6573790	        51.20 ns/op	     183 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6399625	        52.69 ns/op	     187 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6375080	        52.19 ns/op	     188 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6493754	        51.30 ns/op	     185 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6474183	        51.09 ns/op	     185 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6549314	        51.27 ns/op	     180 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6637442	        52.18 ns/op	     182 B/op	       1 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkTTLOverwriteSerial-8   	 6587564	        51.05 ns/op	     182 B/op	       1 allocs/op
+PASS

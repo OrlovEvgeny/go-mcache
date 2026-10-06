@@ -1,0 +1,79 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+                                    │ benchmarks/after-arm64.txt │      benchmarks/simd-arm64.txt      │
+                                    │           sec/op           │    sec/op     vs base               │
+CacheGet-8                                           9.827n ± 3%   9.828n ± 14%       ~ (p=0.644 n=10)
+CacheSet-8                                           33.35n ± 7%   34.27n ±  7%       ~ (p=0.118 n=10)
+CacheSetWithTTL-8                                    254.6n ± 4%   249.9n ±  4%       ~ (p=0.529 n=10)
+CacheMixed-8                                         16.76n ± 7%   16.75n ±  6%       ~ (p=0.926 n=10)
+CacheZipf-8                                          193.3n ± 2%   194.5n ±  2%       ~ (p=0.725 n=10)
+TTLOverwriteSerial-8                                 55.40n ± 4%   56.56n ±  5%       ~ (p=0.481 n=10)
+BatchSizes/optimized=false/n=1-8                     50.60n ± 4%   51.50n ±  3%       ~ (p=0.289 n=10)
+BatchSizes/optimized=false/n=16-8                    243.8n ± 3%   233.6n ±  2%  -4.22% (p=0.002 n=10)
+BatchSizes/optimized=false/n=64-8                    847.1n ± 3%   797.3n ±  3%  -5.88% (p=0.000 n=10)
+BatchSizes/optimized=false/n=256-8                   3.366µ ± 3%   3.145µ ±  3%  -6.57% (p=0.000 n=10)
+BatchSizes/optimized=false/n=1024-8                  14.71µ ± 4%   13.49µ ±  5%  -8.27% (p=0.000 n=10)
+BatchSizes/optimized=true/n=1-8                      50.61n ± 2%   50.77n ±  2%       ~ (p=0.839 n=10)
+BatchSizes/optimized=true/n=16-8                     347.7n ± 6%   343.1n ±  6%       ~ (p=0.315 n=10)
+BatchSizes/optimized=true/n=64-8                     1.495µ ± 2%   1.427µ ±  3%  -4.58% (p=0.000 n=10)
+BatchSizes/optimized=true/n=256-8                    6.935µ ± 3%   6.619µ ±  4%  -4.56% (p=0.015 n=10)
+BatchSizes/optimized=true/n=1024-8                   31.49µ ± 1%   30.54µ ±  2%  -3.02% (p=0.009 n=10)
+TTLUnique-8                                          945.5µ ± 8%   935.4µ ±  8%       ~ (p=0.796 n=10)
+geomean                                              552.8n        541.6n        -2.04%
+
+                                    │ benchmarks/after-arm64.txt │       benchmarks/simd-arm64.txt       │
+                                    │            B/op            │     B/op      vs base                 │
+CacheGet-8                                          0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheSet-8                                          48.00 ± 0%       48.00 ± 0%       ~ (p=1.000 n=10) ¹
+CacheSetWithTTL-8                                   225.0 ± 3%       223.0 ± 3%       ~ (p=0.780 n=10)
+CacheMixed-8                                        9.000 ± 0%       9.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheZipf-8                                         8.000 ± 0%       8.000 ± 0%       ~ (p=1.000 n=10) ¹
+TTLOverwriteSerial-8                                185.0 ± 4%       181.5 ± 5%       ~ (p=0.381 n=10)
+BatchSizes/optimized=false/n=1-8                    120.0 ± 0%       120.0 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=16-8                   368.0 ± 0%       368.0 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=64-8                 1.156Ki ± 0%     1.156Ki ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=256-8                4.347Ki ± 0%     4.347Ki ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=1024-8               17.13Ki ± 0%     17.13Ki ± 0%       ~ (p=0.444 n=10)
+BatchSizes/optimized=true/n=1-8                     120.0 ± 0%       120.0 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=16-8                    368.0 ± 0%       368.0 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=64-8                  1.156Ki ± 0%     1.156Ki ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=256-8                 4.349Ki ± 0%     4.349Ki ± 0%       ~ (p=1.000 n=10)
+BatchSizes/optimized=true/n=1024-8                17.12Ki ± 0%     17.12Ki ± 0%       ~ (p=0.220 n=10)
+TTLUnique-8                                       1.944Mi ± 0%     1.944Mi ± 0%       ~ (p=0.971 n=10)
+geomean                                                        ²                 -0.16%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                    │ benchmarks/after-arm64.txt │      benchmarks/simd-arm64.txt       │
+                                    │         allocs/op          │  allocs/op   vs base                 │
+CacheGet-8                                          0.000 ± 0%      0.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheSet-8                                          1.000 ± 0%      1.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheSetWithTTL-8                                   1.000 ± 0%      1.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheMixed-8                                        0.000 ± 0%      0.000 ± 0%       ~ (p=1.000 n=10) ¹
+CacheZipf-8                                         0.000 ± 0%      0.000 ± 0%       ~ (p=1.000 n=10) ¹
+TTLOverwriteSerial-8                                1.000 ± 0%      1.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=1-8                    4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=16-8                   4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=64-8                   4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=256-8                  4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=false/n=1024-8                 4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=1-8                     4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=16-8                    4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=64-8                    4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=256-8                   4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+BatchSizes/optimized=true/n=1024-8                  4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10) ¹
+TTLUnique-8                                        14.22k ± 0%     14.23k ± 0%       ~ (p=0.239 n=10)
+geomean                                                        ²                +0.01%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+            │ benchmarks/after-arm64.txt │  benchmarks/simd-arm64.txt   │
+            │            hit%            │    hit%     vs base          │
+CacheZipf-8                   87.47 ± 0%   87.46 ± 0%  ~ (p=0.187 n=10)
+
+            │ benchmarks/after-arm64.txt │    benchmarks/simd-arm64.txt    │
+            │         entries/op         │ entries/op   vs base            │
+TTLUnique-8                  10.00k ± 0%   10.00k ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

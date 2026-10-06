@@ -1,0 +1,220 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	30553138	        10.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10605026	        33.31 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1395262	       256.5 ns/op	     225 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	20630421	        16.55 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1889786	       187.0 ns/op	        87.44 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6581607	        55.77 ns/op	     181 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6465517	        54.35 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1496276	       240.5 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  439490	       817.9 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  112825	      3172 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   25868	     13875 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 6013484	        59.93 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  773916	       464.6 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  181844	      1962 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   41973	      8541 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    9384	     38023 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     397	    908415 ns/op	     10000 entries/op	 2035379 B/op	   14201 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	34949049	         9.804 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10409512	        33.60 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1401938	       257.5 ns/op	     219 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21752866	        16.83 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1803162	       194.3 ns/op	        87.44 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6407052	        54.82 ns/op	     192 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6218162	        57.40 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1441636	       250.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  423980	       860.6 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  106876	      3342 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24510	     14741 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5721398	        62.19 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  758266	       475.6 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  186313	      1926 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   41456	      8714 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    8958	     39360 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     388	    938883 ns/op	     10000 entries/op	 2044967 B/op	   14249 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	36304045	         9.788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10161405	        33.48 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1383496	       255.3 ns/op	     226 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21448040	        16.57 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1798065	       191.8 ns/op	        87.48 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6527019	        55.16 ns/op	     193 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6194947	        56.73 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1435064	       251.6 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  431592	       855.4 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  109766	      3322 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24784	     14549 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5850514	        61.12 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  781298	       463.2 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  185695	      1921 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   40900	      8859 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    9109	     38687 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     385	    932045 ns/op	     10000 entries/op	 2048205 B/op	   14284 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	30912454	        10.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	 9392396	        35.32 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1435983	       252.0 ns/op	     223 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	19793269	        19.10 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1779282	       198.1 ns/op	        87.48 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6199374	        56.34 ns/op	     183 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6053077	        58.78 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1397439	       274.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  417428	       874.2 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  106014	      3410 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24042	     15402 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5485521	        68.89 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  676929	       552.5 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  146112	      2157 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   35418	     11722 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    7276	     43669 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     340	   1048125 ns/op	     10000 entries/op	 2042248 B/op	   14223 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	30474255	        13.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	 9588834	        41.52 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1381768	       256.3 ns/op	     222 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21707450	        17.96 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1773134	       195.1 ns/op	        87.48 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6203095	        57.63 ns/op	     180 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6405398	        55.97 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1420509	       251.6 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  429510	       866.4 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  108620	      3314 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   22819	     16093 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5528365	        64.64 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  709248	       502.4 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  177130	      2054 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   40004	      9134 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    7987	     41877 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     354	   1015083 ns/op	     10000 entries/op	 2036864 B/op	   14213 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	34999592	         9.740 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10427767	        33.46 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1467782	       251.8 ns/op	     222 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	18747069	        19.45 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1789646	       195.1 ns/op	        87.44 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6378543	        56.10 ns/op	     170 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6303812	        58.29 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1418107	       252.7 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  421309	       870.4 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  107752	      3318 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24964	     14369 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5915502	        62.10 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  758332	       476.0 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  180897	      2080 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   39654	      9007 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    8169	     39880 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     382	    953301 ns/op	     10000 entries/op	 2039983 B/op	   14243 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	36011101	         9.973 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10309449	        34.53 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1345982	       255.0 ns/op	     225 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	20911690	        17.63 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1788117	       193.2 ns/op	        87.44 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6562836	        55.66 ns/op	     181 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6001036	        57.04 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1440822	       249.5 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  422142	       852.8 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  109150	      3367 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24721	     14600 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5904429	        61.62 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  766779	       487.5 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  183601	      1986 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   39410	      9119 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    8821	     39505 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     385	    957407 ns/op	     10000 entries/op	 2044009 B/op	   14235 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	36578859	        11.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10103206	        40.28 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1314404	       259.5 ns/op	     227 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21873915	        16.69 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1793198	       192.3 ns/op	        87.48 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6411915	        56.06 ns/op	     179 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6362821	        57.17 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1420498	       253.1 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  418552	       861.6 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  109248	      3320 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24435	     15196 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5530608	        63.68 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  749011	       485.1 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  176052	      2079 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   40040	      8983 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    9277	     40040 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     381	    943558 ns/op	     10000 entries/op	 2035756 B/op	   14188 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	36121004	         9.823 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10535068	        33.05 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1448698	       258.6 ns/op	     228 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21540762	        18.70 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1683472	       205.3 ns/op	        87.44 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 4886362	        63.70 ns/op	     178 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 5887158	        61.01 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1370216	       263.2 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  425518	       854.7 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  108211	      3497 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   23298	     15079 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5948650	        60.67 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  761508	       476.9 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  186900	      1935 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   40759	      9481 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    8706	     40176 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     386	    934143 ns/op	     10000 entries/op	 2040487 B/op	   14213 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+BenchmarkCacheGet-8             	34427934	         9.749 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheSet-8             	10207492	        33.66 ns/op	      48 B/op	       1 allocs/op
+BenchmarkCacheSetWithTTL-8      	 1455235	       242.6 ns/op	     219 B/op	       1 allocs/op
+BenchmarkCacheMixed-8           	21724044	        16.57 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCacheZipf-8            	 1782357	       192.1 ns/op	        87.50 hit%	       8 B/op	       0 allocs/op
+BenchmarkTTLOverwriteSerial-8   	 6466731	        55.58 ns/op	     176 B/op	       1 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1-8         	 6362530	        57.12 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=16-8        	 1405782	       255.8 ns/op	     512 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=64-8        	  421629	       864.6 ns/op	    1760 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=256-8       	  108212	      3346 ns/op	    7008 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=false/n=1024-8      	   24855	     14391 ns/op	   28000 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1-8          	 5798571	        61.72 ns/op	     136 B/op	       6 allocs/op
+BenchmarkBatchSizes/optimized=true/n=16-8         	  749713	       470.3 ns/op	    1024 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=64-8         	  186429	      1953 ns/op	    3808 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=256-8        	   40647	      8886 ns/op	   15200 B/op	       7 allocs/op
+BenchmarkBatchSizes/optimized=true/n=1024-8       	    8814	     39841 ns/op	   60768 B/op	       7 allocs/op
+BenchmarkTTLUnique-8                              	     379	    950695 ns/op	     10000 entries/op	 2039246 B/op	   14209 allocs/op
+PASS

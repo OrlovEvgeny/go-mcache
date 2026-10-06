@@ -13,8 +13,11 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        experiment: ["", simd]
     runs-on: ${{ matrix.os }}
+    env:
+      GOEXPERIMENT: ${{ matrix.experiment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +36,12 @@ jobs:
 
       - name: Test with race detector
         run: go test -race -count=1 ./...
+
+      - name: Test SIMD scalar fallback
+        if: matrix.experiment == 'simd'
+        env:
+          GODEBUG: simd=0
+        run: go test -count=1 ./...
 
   benchmark:
     runs-on: ubuntu-latest

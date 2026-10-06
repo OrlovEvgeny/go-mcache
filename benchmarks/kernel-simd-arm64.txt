@@ -1,0 +1,55 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache/internal/store
+cpu: Apple M4 Pro
+BenchmarkExpiryKernel/16-8         	18781992	        11.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	21838198	        10.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	24095478	        10.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	22314164	        10.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	24459326	        10.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	23694733	        10.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	23480493	        10.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	22824355	        10.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	24340874	         9.967 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16-8         	23351414	        10.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12991112	        19.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	13124227	        18.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12899121	        18.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12802786	        18.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12878068	        18.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12947542	        18.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12888732	        18.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	13007746	        18.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	12980106	        18.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/64-8         	13078246	        18.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3621691	        66.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3637364	        66.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3625699	        66.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3638805	        66.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3577096	        68.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3610596	        65.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3622930	        66.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3570720	        67.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3597571	        66.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/256-8        	 3570363	        67.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  895869	       268.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  929407	       265.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  903246	       264.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  924632	       281.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  922500	       263.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  920612	       266.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  928791	       264.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  924261	       266.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  958178	       264.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/1024-8       	  937423	       264.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   45452	      5310 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   43200	      5473 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   43213	      5438 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   44869	      5394 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41568	      5764 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41288	      5793 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41338	      5780 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41448	      5814 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41941	      5780 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExpiryKernel/16384-8      	   41793	      5790 ns/op	       0 B/op	       0 allocs/op
+PASS

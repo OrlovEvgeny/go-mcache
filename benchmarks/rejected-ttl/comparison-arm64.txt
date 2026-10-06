@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+                     │ benchmarks/rejected-ttl/baseline-arm64.txt │ benchmarks/rejected-ttl/candidate-arm64.txt │
+                     │                   sec/op                   │       sec/op         vs base                │
+TTLOverwriteSerial-8                                  51.74n ± 4%           59.73n ± 1%  +15.45% (p=0.000 n=10)
+
+                     │ benchmarks/rejected-ttl/baseline-arm64.txt │ benchmarks/rejected-ttl/candidate-arm64.txt │
+                     │                    B/op                    │        B/op          vs base                │
+TTLOverwriteSerial-8                                  185.00 ± 4%            48.00 ± 0%  -74.05% (p=0.000 n=10)
+
+                     │ benchmarks/rejected-ttl/baseline-arm64.txt │ benchmarks/rejected-ttl/candidate-arm64.txt │
+                     │                 allocs/op                  │        allocs/op         vs base            │
+TTLOverwriteSerial-8                                   1.000 ± 0%                1.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

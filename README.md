@@ -50,6 +50,18 @@ go get github.com/OrlovEvgeny/go-mcache
 
 Requires Go 1.27+
 
+Optional SIMD TTL classification for batch reads and background cleanup:
+
+```sh
+GOEXPERIMENT=simd go test ./...
+GOEXPERIMENT=simd go build ./...
+```
+
+The normal build uses the scalar implementation. SIMD builds also use it for
+emulated hardware and arrays shorter than 64 elements. See the
+[measurement report](benchmarks/README.md) for batch results, reproducible
+commands, the rejected TTL/Roaring candidate, and pending native amd64 validation.
+
 ## Usage
 
 ```go
