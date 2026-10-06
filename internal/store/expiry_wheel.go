@@ -1,6 +1,7 @@
 package store
 
 import (
+	"math"
 	"time"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
@@ -11,17 +12,25 @@ const defaultExpiryWheelBuckets = 4096
 // expiryWheel belongs to one storage shard. Every access, including bitmap
 // iteration, requires that shard's write lock. Entries are immutable; slots
 // refer only to the currently published TTL entry, never to an update history.
+type ttlRegistration[K comparable] struct {
+	Key      K
+	ExpireAt int64
+}
+
 type expiryWheel[K comparable, V any] struct {
 	resolution    int64
 	currentTick   int64
+	slotStart     int64
+	slotEnd       int64
+	slotTick      int64
 	ids           map[K]uint32
-	entries       []*Entry[K, V]
+	entries       []ttlRegistration[K]
 	free          []uint32
 	slots         []uint16
 	buckets       map[uint16]*expiryBucket
 	first         expiryBucket
 	firstSlot     uint16
-	inlineEntries [16]*Entry[K, V]
+	inlineEntries [16]ttlRegistration[K]
 	inlineSlots   [16]uint16
 }
 
@@ -59,10 +68,29 @@ func (w *expiryWheel[K, V]) ensureBucket(slot uint16) *expiryBucket {
 // Schedule on the first tick strictly after the deadline: reads expire only
 // when now > deadline. Division before addition also avoids int64 overflow.
 func (w *expiryWheel[K, V]) slot(deadline int64) uint16 {
-	tick := deadline/w.resolution + 1
+	if deadline >= w.slotStart && deadline <= w.slotEnd && w.slotTick > w.currentTick {
+		return uint16(uint64(w.slotTick) & (defaultExpiryWheelBuckets - 1))
+	}
+	return w.computeSlot(deadline)
+}
+
+// Consecutive TTL writes usually share a coarse bucket. Cache its range to
+// avoid integer division on every overwrite, without rounding the deadline.
+func (w *expiryWheel[K, V]) computeSlot(deadline int64) uint16 {
+	quotient := deadline / w.resolution
+	w.slotStart = quotient * w.resolution
+	w.slotEnd = w.slotStart + w.resolution - 1
+	if w.slotEnd < w.slotStart {
+		w.slotEnd = math.MaxInt64
+	}
+	tick := quotient + 1
+	if quotient == math.MaxInt64 {
+		tick = quotient
+	}
 	if tick <= w.currentTick {
 		tick = w.currentTick + 1
 	}
+	w.slotTick = tick
 	return uint16(uint64(tick) & (defaultExpiryWheelBuckets - 1))
 }
 
@@ -85,22 +113,21 @@ func (w *expiryWheel[K, V]) find(key K) (uint32, bool) {
 		return id, ok
 	}
 	for i, e := range w.entries {
-		if e != nil && e.Key == key {
+		if e.ExpireAt > 0 && e.Key == key {
 			return uint32(i), true
 		}
 	}
 	return 0, false
 }
 
-// Pointer identity avoids generic key comparisons in the small registry.
-// The caller obtained prev from this shard while holding its write lock.
+// The caller obtained entry from this shard while holding its write lock.
 func (w *expiryWheel[K, V]) findEntry(entry *Entry[K, V]) (uint32, bool) {
 	if w.ids != nil {
 		id, ok := w.ids[entry.Key]
 		return id, ok
 	}
 	for i, e := range w.entries {
-		if e == entry {
+		if e.Key == entry.Key && e.ExpireAt > 0 {
 			return uint32(i), true
 		}
 	}
@@ -116,7 +143,7 @@ func (w *expiryWheel[K, V]) set(entry, prev *Entry[K, V]) {
 	slot := w.slot(entry.ExpireAt)
 	if ok {
 		if w.slots[id] == slot {
-			w.entries[id] = entry
+			w.entries[id].ExpireAt = entry.ExpireAt
 			return
 		}
 		w.removeFromBucket(id)
@@ -130,7 +157,7 @@ func (w *expiryWheel[K, V]) set(entry, prev *Entry[K, V]) {
 				panic("mcache: ttl identifier space exhausted")
 			}
 			id = uint32(len(w.entries))
-			w.entries = append(w.entries, nil)
+			w.entries = append(w.entries, ttlRegistration[K]{})
 			if len(w.entries) == len(w.inlineEntries)+1 {
 				clear(w.inlineEntries[:])
 			}
@@ -141,14 +168,14 @@ func (w *expiryWheel[K, V]) set(entry, prev *Entry[K, V]) {
 		} else if len(w.entries) > 32 {
 			w.ids = make(map[K]uint32, len(w.entries))
 			for i, e := range w.entries {
-				if e != nil {
+				if e.ExpireAt > 0 {
 					w.ids[e.Key] = uint32(i)
 				}
 			}
 			w.ids[entry.Key] = id
 		}
 	}
-	w.entries[id] = entry
+	w.entries[id] = ttlRegistration[K]{entry.Key, entry.ExpireAt}
 	w.slots[id] = slot
 	b := w.ensureBucket(slot)
 	b.Add(id)
@@ -164,7 +191,7 @@ func (w *expiryWheel[K, V]) remove(entry *Entry[K, V]) {
 	}
 	w.removeFromBucket(id)
 	delete(w.ids, entry.Key)
-	w.entries[id] = nil
+	w.entries[id] = ttlRegistration[K]{}
 	w.free = append(w.free, id)
 }
 
@@ -211,28 +238,42 @@ func (s *ShardedStore[K, V]) AdvanceExpiration(now int64) []*Entry[K, V] {
 			if b == nil || b.IsEmpty() {
 				continue
 			}
-			// Do not mutate a bitmap while iterating it.
-			var removed []uint32
+			// Iterate into private chunks and classify deadlines before deleting.
+			// Bitmap mutation waits until its iterator is exhausted; IDs become
+			// reusable only after every old membership has been removed.
+			var ids [256]uint32
+			var deadlines [256]int64
+			freeStart := len(w.free)
 			it := b.Iterator()
 			for it.HasNext() {
-				id := it.Next()
-				entry := w.entries[id]
-				if entry.ExpireAt > 0 && now > entry.ExpireAt {
-					// The registry and store are published together under this same lock.
-					if sh.m[entry.Key] == entry {
+				n := 0
+				for n < len(ids) && it.HasNext() {
+					id := it.Next()
+					ids[n] = id
+					deadlines[n] = w.entries[id].ExpireAt
+					n++
+				}
+				markExpired(deadlines[:n], now)
+				for i, mask := range deadlines[:n] {
+					if mask == 0 {
+						continue
+					}
+					id := ids[i]
+					registration := w.entries[id]
+					entry := sh.m[registration.Key]
+					if entry != nil && entry.ExpireAt == registration.ExpireAt {
 						delete(sh.m, entry.Key)
 						expired = append(expired, entry)
 						s.size.Add(-1)
 					}
-					delete(w.ids, entry.Key)
-					w.entries[id] = nil
-					removed = append(removed, id)
+					delete(w.ids, registration.Key)
+					w.entries[id] = ttlRegistration[K]{}
+					w.free = append(w.free, id)
 				}
 			}
-			for _, id := range removed {
+			for _, id := range w.free[freeStart:] {
 				b.Remove(id)
 			}
-			w.free = append(w.free, removed...)
 			if b.IsEmpty() {
 				delete(w.buckets, slot)
 			}

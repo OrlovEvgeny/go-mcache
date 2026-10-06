@@ -165,7 +165,9 @@ func (s *ShardedStore[K, V]) Update(entry *Entry[K, V]) (*Entry[K, V], bool) {
 	prev, exists := sh.m[entry.Key]
 	if exists {
 		sh.m[entry.Key] = entry
-		s.registerTTL(sh, entry, prev)
+		if prev == nil || prev.ExpireAt != entry.ExpireAt {
+			s.registerTTL(sh, entry, prev)
+		}
 	}
 	sh.mu.Unlock()
 
@@ -187,7 +189,9 @@ func (s *ShardedStore[K, V]) Set(entry *Entry[K, V]) *Entry[K, V] {
 	sh.mu.Lock()
 	prev, existed := sh.m[entry.Key]
 	sh.m[entry.Key] = entry
-	s.registerTTL(sh, entry, prev)
+	if prev == nil || prev.ExpireAt != entry.ExpireAt {
+		s.registerTTL(sh, entry, prev)
+	}
 	if !existed {
 		s.size.Add(1)
 	}

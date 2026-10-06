@@ -136,7 +136,7 @@ func TestExpirationConcurrent(t *testing.T) {
 			for it.HasNext() {
 				id := it.Next()
 				e := w.entries[id]
-				if e == nil || sh.m[e.Key] != e || w.slots[id] != slot {
+				if e.ExpireAt == 0 || sh.m[e.Key] == nil || sh.m[e.Key].ExpireAt != e.ExpireAt || w.slots[id] != slot {
 					t.Fatal("stale registration")
 				}
 				ids++
@@ -203,5 +203,29 @@ func TestExpirationModel(t *testing.T) {
 			t.Fatal("chunked cleanup", n)
 		}
 		now += 3
+	}
+}
+
+func TestExpirationRegistryReleasesEntries(t *testing.T) {
+	s := NewShardedStore[int, *[1024]byte](1, nil)
+	for k := range 40 {
+		s.Set(&Entry[int, *[1024]byte]{Key: k, Value: new([1024]byte), ExpireAt: clock.NowNano() + int64(time.Hour)})
+	}
+	w := s.shards[0].expiry
+	for k := range 40 {
+		s.Delete(k)
+	}
+	for _, e := range w.entries {
+		if e.ExpireAt != 0 {
+			t.Fatal("deleted entry retained in registry")
+		}
+	}
+	for _, e := range w.inlineEntries {
+		if e.ExpireAt != 0 {
+			t.Fatal("entry retained in old inline backing array")
+		}
+	}
+	if len(w.ids) != 0 || !w.first.IsEmpty() || len(w.buckets) != 0 || len(w.free) != 40 {
+		t.Fatal("ttl indices not released")
 	}
 }
