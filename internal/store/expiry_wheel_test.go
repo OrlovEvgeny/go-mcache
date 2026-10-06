@@ -2,8 +2,8 @@ package store
 
 import (
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
-	"github.com/RoaringBitmap/roaring/v2"
 	"math"
+	"math/rand/v2"
 	"sync"
 	"testing"
 	"time"
@@ -127,7 +127,7 @@ func TestExpirationConcurrent(t *testing.T) {
 			continue
 		}
 		var ids int
-		buckets := map[uint16]*roaring.Bitmap{w.firstSlot: &w.first}
+		buckets := map[uint16]*expiryBucket{w.firstSlot: &w.first}
 		for slot, b := range w.buckets {
 			buckets[slot] = b
 		}
@@ -148,5 +148,60 @@ func TestExpirationConcurrent(t *testing.T) {
 	}
 	if s.Len() != count {
 		t.Fatalf("len=%d entries=%d", s.Len(), count)
+	}
+}
+
+func TestExpirationModel(t *testing.T) {
+	s := NewShardedStore[int, int](1, func(int) uint64 { return 1 })
+	s.ConfigureExpiration(time.Nanosecond)
+	now := clock.NowNano()
+	model := make(map[int]*Entry[int, int])
+	rng := rand.New(rand.NewPCG(123, 456))
+	for i := range 20000 {
+		k := rng.IntN(600)
+		switch rng.IntN(6) {
+		case 0:
+			s.Delete(k)
+			delete(model, k)
+		case 1:
+			now += int64(rng.IntN(5000))
+			want := 0
+			for k, e := range model {
+				if e.ExpireAt > 0 && now > e.ExpireAt {
+					delete(model, k)
+					want++
+				}
+			}
+			if got := len(s.AdvanceExpiration(now)); got != want {
+				t.Fatalf("iteration %d: expired=%d want=%d", i, got, want)
+			}
+		default:
+			deadline := now + int64(rng.IntN(20000))
+			if rng.IntN(10) == 0 {
+				deadline = 0
+			}
+			e := &Entry[int, int]{Key: k, Value: i, KeyHash: 1, ExpireAt: deadline}
+			s.Set(e)
+			model[k] = e
+		}
+		if len(model) != s.Len() {
+			t.Fatal("size diverged")
+		}
+		for k, e := range model {
+			if s.shards[0].m[k] != e {
+				t.Fatal("value diverged")
+			}
+		}
+	}
+	s.Clear()
+	// Exercise multiple full vector chunks in a single bitmap, plus ID reuse.
+	for round := range 2 {
+		for k := range 1025 {
+			s.Set(&Entry[int, int]{Key: k, Value: round, KeyHash: 1, ExpireAt: now + 1})
+		}
+		if n := len(s.AdvanceExpiration(now + 2)); n != 1025 {
+			t.Fatal("chunked cleanup", n)
+		}
+		now += 3
 	}
 }

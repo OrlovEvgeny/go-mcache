@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
-	"github.com/RoaringBitmap/roaring/v2"
 )
 
 const defaultExpiryWheelBuckets = 4096
@@ -19,8 +18,8 @@ type expiryWheel[K comparable, V any] struct {
 	entries       []*Entry[K, V]
 	free          []uint32
 	slots         []uint16
-	buckets       map[uint16]*roaring.Bitmap
-	first         roaring.Bitmap
+	buckets       map[uint16]*expiryBucket
+	first         expiryBucket
 	firstSlot     uint16
 	inlineEntries [16]*Entry[K, V]
 	inlineSlots   [16]uint16
@@ -35,13 +34,13 @@ func newExpiryWheel[K comparable, V any](resolution int64) *expiryWheel[K, V] {
 
 // The common case has one active deadline bucket. Embed it to avoid a map
 // and bitmap allocation per small shard; allocate the map only on divergence.
-func (w *expiryWheel[K, V]) bucket(slot uint16) *roaring.Bitmap {
+func (w *expiryWheel[K, V]) bucket(slot uint16) *expiryBucket {
 	if slot == w.firstSlot {
 		return &w.first
 	}
 	return w.buckets[slot]
 }
-func (w *expiryWheel[K, V]) ensureBucket(slot uint16) *roaring.Bitmap {
+func (w *expiryWheel[K, V]) ensureBucket(slot uint16) *expiryBucket {
 	if b := w.bucket(slot); b != nil {
 		return b
 	}
@@ -50,9 +49,9 @@ func (w *expiryWheel[K, V]) ensureBucket(slot uint16) *roaring.Bitmap {
 		return &w.first
 	}
 	if w.buckets == nil {
-		w.buckets = make(map[uint16]*roaring.Bitmap)
+		w.buckets = make(map[uint16]*expiryBucket)
 	}
-	b := roaring.New()
+	b := new(expiryBucket)
 	w.buckets[slot] = b
 	return b
 }
@@ -93,10 +92,30 @@ func (w *expiryWheel[K, V]) find(key K) (uint32, bool) {
 	return 0, false
 }
 
-func (w *expiryWheel[K, V]) set(entry *Entry[K, V]) {
-	id, ok := w.find(entry.Key)
+// Pointer identity avoids generic key comparisons in the small registry.
+// The caller obtained prev from this shard while holding its write lock.
+func (w *expiryWheel[K, V]) findEntry(entry *Entry[K, V]) (uint32, bool) {
+	if w.ids != nil {
+		id, ok := w.ids[entry.Key]
+		return id, ok
+	}
+	for i, e := range w.entries {
+		if e == entry {
+			return uint32(i), true
+		}
+	}
+	return 0, false
+}
+
+func (w *expiryWheel[K, V]) set(entry, prev *Entry[K, V]) {
+	var id uint32
+	var ok bool
+	if prev != nil && prev.ExpireAt > 0 {
+		id, ok = w.findEntry(prev)
+	}
+	slot := w.slot(entry.ExpireAt)
 	if ok {
-		if w.slots[id] == w.slot(entry.ExpireAt) {
+		if w.slots[id] == slot {
 			w.entries[id] = entry
 			return
 		}
@@ -112,6 +131,9 @@ func (w *expiryWheel[K, V]) set(entry *Entry[K, V]) {
 			}
 			id = uint32(len(w.entries))
 			w.entries = append(w.entries, nil)
+			if len(w.entries) == len(w.inlineEntries)+1 {
+				clear(w.inlineEntries[:])
+			}
 			w.slots = append(w.slots, 0)
 		}
 		if w.ids != nil {
@@ -127,19 +149,21 @@ func (w *expiryWheel[K, V]) set(entry *Entry[K, V]) {
 		}
 	}
 	w.entries[id] = entry
-	slot := w.slot(entry.ExpireAt)
 	w.slots[id] = slot
 	b := w.ensureBucket(slot)
 	b.Add(id)
 }
 
-func (w *expiryWheel[K, V]) remove(key K) {
-	id, ok := w.find(key)
+func (w *expiryWheel[K, V]) remove(entry *Entry[K, V]) {
+	if entry == nil || entry.ExpireAt <= 0 {
+		return
+	}
+	id, ok := w.findEntry(entry)
 	if !ok {
 		return
 	}
 	w.removeFromBucket(id)
-	delete(w.ids, key)
+	delete(w.ids, entry.Key)
 	w.entries[id] = nil
 	w.free = append(w.free, id)
 }
@@ -152,14 +176,14 @@ func (s *ShardedStore[K, V]) ConfigureExpiration(resolution time.Duration) {
 	s.expiryResolution = int64(resolution)
 }
 
-func (s *ShardedStore[K, V]) registerTTL(sh *shard[K, V], entry *Entry[K, V]) {
+func (s *ShardedStore[K, V]) registerTTL(sh *shard[K, V], entry, prev *Entry[K, V]) {
 	if entry.ExpireAt > 0 {
 		if sh.expiry == nil {
 			sh.expiry = newExpiryWheel[K, V](s.expiryResolution)
 		}
-		sh.expiry.set(entry)
+		sh.expiry.set(entry, prev)
 	} else if sh.expiry != nil {
-		sh.expiry.remove(entry.Key)
+		sh.expiry.remove(prev)
 	}
 }
 

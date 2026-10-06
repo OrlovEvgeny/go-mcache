@@ -165,7 +165,7 @@ func (s *ShardedStore[K, V]) Update(entry *Entry[K, V]) (*Entry[K, V], bool) {
 	prev, exists := sh.m[entry.Key]
 	if exists {
 		sh.m[entry.Key] = entry
-		s.registerTTL(sh, entry)
+		s.registerTTL(sh, entry, prev)
 	}
 	sh.mu.Unlock()
 
@@ -187,7 +187,7 @@ func (s *ShardedStore[K, V]) Set(entry *Entry[K, V]) *Entry[K, V] {
 	sh.mu.Lock()
 	prev, existed := sh.m[entry.Key]
 	sh.m[entry.Key] = entry
-	s.registerTTL(sh, entry)
+	s.registerTTL(sh, entry, prev)
 	if !existed {
 		s.size.Add(1)
 	}
@@ -207,7 +207,7 @@ func (s *ShardedStore[K, V]) Delete(key K) *Entry[K, V] {
 	if existed {
 		delete(sh.m, key)
 		if sh.expiry != nil {
-			sh.expiry.remove(key)
+			sh.expiry.remove(entry)
 		}
 	}
 	if existed {
@@ -227,7 +227,7 @@ func (s *ShardedStore[K, V]) DeleteByHash(key K, keyHash uint64) *Entry[K, V] {
 	if existed {
 		delete(sh.m, key)
 		if sh.expiry != nil {
-			sh.expiry.remove(key)
+			sh.expiry.remove(entry)
 		}
 	}
 	if existed {
@@ -390,7 +390,7 @@ func (s *ShardedStore[K, V]) CollectExpired(now int64) []*Entry[K, V] {
 			if entry.ExpireAt > 0 && now > entry.ExpireAt {
 				delete(sh.m, key)
 				if sh.expiry != nil {
-					sh.expiry.remove(key)
+					sh.expiry.remove(entry)
 				}
 				expired = append(expired, entry)
 				s.size.Add(-1)
@@ -411,7 +411,7 @@ func (s *ShardedStore[K, V]) DeleteIfExpired(key K, keyHash uint64, expireAt int
 	if exists && entry.ExpireAt == expireAt && entry.ExpireAt > 0 && now > entry.ExpireAt {
 		delete(sh.m, key)
 		if sh.expiry != nil {
-			sh.expiry.remove(key)
+			sh.expiry.remove(entry)
 		}
 	} else {
 		entry = nil
