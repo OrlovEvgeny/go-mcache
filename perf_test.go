@@ -3,10 +3,12 @@ package mcache
 import (
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/OrlovEvgeny/go-mcache/internal/clock"
+	"github.com/OrlovEvgeny/go-mcache/internal/policy"
 	"github.com/OrlovEvgeny/go-mcache/internal/store"
 )
 
@@ -87,6 +89,8 @@ func TestBatchSemantics(t *testing.T) {
 					c.Set(i, 10+i, 0)
 				}
 				c.store.Set(&store.Entry[int, int]{Key: 4, Value: 14, KeyHash: 7, ExpireAt: clock.NowNano() - 1})
+				tracked := &accessPolicy{Policer: c.policy}
+				c.policy = tracked
 				get := c.GetBatch
 				if optimized {
 					get = c.GetBatchOptimized
@@ -114,6 +118,9 @@ func TestBatchSemantics(t *testing.T) {
 					t.Fatalf("metrics: %+v", m)
 				}
 				c.Wait()
+				if tracked.accesses.Load() != 4 {
+					t.Fatalf("policy accesses=%d", tracked.accesses.Load())
+				}
 				get([]int{9, 9, 9, 9, 9, 9})
 				if r.Values[0] != 12 || !r.Found[0] {
 					t.Fatal("returned slices were reused")
@@ -159,3 +166,63 @@ func TestBatchHashesOnce(t *testing.T) {
 		t.Fatalf("hash calls=%d result=%+v", calls, r)
 	}
 }
+
+func TestLargeBatchMixedTTL(t *testing.T) {
+	for _, lockfree := range []bool{false, true} {
+		for _, optimized := range []bool{false, true} {
+			t.Run(fmt.Sprintf("lockfree=%t/optimized=%t", lockfree, optimized), func(t *testing.T) {
+				c := NewCache[int, int](WithMaxEntries[int, int](256), WithLockFreePolicy[int, int](lockfree), WithMetrics[int, int](true), WithShardCount[int, int](4), WithExpirationResolution[int, int](time.Hour))
+				defer c.Close()
+				now := clock.NowNano()
+				keys := make([]int, 1025)
+				for i := range keys {
+					k := i % 256
+					keys[i] = k
+					if k%3 == 0 {
+						continue
+					}
+					deadline := int64(0)
+					if k%3 == 1 {
+						deadline = now - 1
+					}
+					c.Set(k, k+10, 0)
+					c.store.Set(&store.Entry[int, int]{Key: k, Value: k + 10, KeyHash: c.store.KeyHash(k), ExpireAt: deadline})
+				}
+				get := c.GetBatch
+				if optimized {
+					get = c.GetBatchOptimized
+				}
+				for round := range 2 {
+					result := get(keys)
+					hits := int64(0)
+					for i, k := range keys {
+						want := k%3 == 2
+						if result.Found[i] != want {
+							t.Fatal(i, k, result.Found[i])
+						}
+						if want {
+							hits++
+							if result.Values[i] != k+10 {
+								t.Fatal("value")
+							}
+						} else if result.Values[i] != 0 {
+							t.Fatal("nonzero miss")
+						}
+					}
+					m := c.Metrics()
+					if m.Hits != hits*int64(round+1) || m.Misses != (1025-hits)*int64(round+1) {
+						t.Fatal(m)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Count the real policy calls, including the buffered policy's replay.
+type accessPolicy struct {
+	policy.Policer[int]
+	accesses atomic.Int64
+}
+
+func (p *accessPolicy) Access(hash uint64) { p.accesses.Add(1); p.Policer.Access(hash) }
