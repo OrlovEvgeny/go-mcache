@@ -1,0 +1,34 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache/internal/store
+cpu: Apple M4 Pro
+                     │ benchmarks/kernel-scalar-arm64.txt │   benchmarks/kernel-simd-arm64.txt   │
+                     │               sec/op               │    sec/op     vs base                │
+ExpiryKernel/16-8                             6.362n ± 2%   10.095n ± 3%  +58.68% (p=0.000 n=10)
+ExpiryKernel/64-8                             20.87n ± 0%    18.74n ± 1%  -10.18% (p=0.000 n=10)
+ExpiryKernel/256-8                            91.91n ± 0%    66.47n ± 2%  -27.68% (p=0.000 n=10)
+ExpiryKernel/1024-8                           335.1n ± 4%    264.9n ± 1%  -20.96% (p=0.000 n=10)
+ExpiryKernel/16384-8                          6.565µ ± 1%    5.772µ ± 7%  -12.07% (p=0.000 n=10)
+geomean                                       121.8n         114.0n        -6.45%
+
+                     │ benchmarks/kernel-scalar-arm64.txt │  benchmarks/kernel-simd-arm64.txt   │
+                     │                B/op                │    B/op     vs base                 │
+ExpiryKernel/16-8                            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/64-8                            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/256-8                           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/1024-8                          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/16384-8                         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                 ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                     │ benchmarks/kernel-scalar-arm64.txt │  benchmarks/kernel-simd-arm64.txt   │
+                     │             allocs/op              │ allocs/op   vs base                 │
+ExpiryKernel/16-8                            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/64-8                            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/256-8                           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/1024-8                          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ExpiryKernel/16384-8                         0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                 ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

@@ -58,13 +58,14 @@ func (w *ExpiryWheel[K]) Resolution() time.Duration {
 	return time.Duration(w.resolution)
 }
 
-// Schedule registers a future expiration.
+// Schedule registers a future expiration on the first tick strictly after
+// its deadline, matching the read path's now > ExpireAt condition.
 func (w *ExpiryWheel[K]) Schedule(key K, keyHash uint64, expireAt int64) {
 	if expireAt <= 0 {
 		return
 	}
 
-	tick := (expireAt + w.resolution - 1) / w.resolution
+	tick := expireAt/w.resolution + 1
 	b := &w.buckets[uint64(tick)&w.mask]
 
 	b.mu.Lock()
@@ -101,18 +102,24 @@ func (w *ExpiryWheel[K]) Advance(now int64) []ExpiryWheelEntry[K] {
 		b.items = nil
 		b.mu.Unlock()
 
-		for _, item := range bucket {
-			if item.ExpireAt <= now {
-				expired = append(expired, item)
-				continue
+		var deadlines [256]int64
+		for start := 0; start < len(bucket); start += len(deadlines) {
+			n := min(len(deadlines), len(bucket)-start)
+			for i, item := range bucket[start : start+n] {
+				deadlines[i] = item.ExpireAt
 			}
-
-			// Not due yet (long TTL wrapped around) — reschedule.
-			futureTick := (item.ExpireAt + w.resolution - 1) / w.resolution
-			fb := &w.buckets[uint64(futureTick)&w.mask]
-			fb.mu.Lock()
-			fb.items = append(fb.items, item)
-			fb.mu.Unlock()
+			markExpired(deadlines[:n], now)
+			for i, item := range bucket[start : start+n] {
+				if deadlines[i] != 0 {
+					expired = append(expired, item)
+					continue
+				}
+				futureTick := item.ExpireAt/w.resolution + 1
+				fb := &w.buckets[uint64(futureTick)&w.mask]
+				fb.mu.Lock()
+				fb.items = append(fb.items, item)
+				fb.mu.Unlock()
+			}
 		}
 	}
 

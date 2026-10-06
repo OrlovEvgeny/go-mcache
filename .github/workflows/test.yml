@@ -13,15 +13,17 @@ jobs:
   test:
     strategy:
       matrix:
-        go-version: ['1.23', '1.24']
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        experiment: ["", simd]
     runs-on: ${{ matrix.os }}
+    env:
+      GOEXPERIMENT: ${{ matrix.experiment }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
 
       - name: Build
         run: go build ./...
@@ -35,6 +37,12 @@ jobs:
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
+      - name: Test SIMD scalar fallback
+        if: matrix.experiment == 'simd'
+        env:
+          GODEBUG: simd=0
+        run: go test -count=1 ./...
+
   benchmark:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +50,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
 
       - name: Run benchmarks
         run: go test -bench=. -benchmem -run=^$ ./... | tee bench.txt

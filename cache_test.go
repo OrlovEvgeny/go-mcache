@@ -688,7 +688,7 @@ func TestIteratorValues(t *testing.T) {
 }
 
 func TestIteratorForEach(t *testing.T) {
-	c := NewCache[string, int]()
+	c := NewCache[string, int](WithShardCount[string, int](1))
 	defer c.Close()
 
 	for i := 0; i < 20; i++ {

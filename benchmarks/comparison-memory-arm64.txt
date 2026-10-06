@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/OrlovEvgeny/go-mcache
+cpu: Apple M4 Pro
+                         │ benchmarks/memory-baseline-arm64.txt │ benchmarks/memory-after-arm64.txt  │
+                         │                sec/op                │   sec/op     vs base               │
+TTLRetained/rounds=1-8                              1.229m ± 8%   1.177m ± 9%       ~ (p=0.063 n=10)
+TTLRetained/rounds=100-8                            56.96m ± 3%   56.82m ± 4%       ~ (p=0.912 n=10)
+geomean                                             8.366m        8.177m       -2.26%
+
+                         │ benchmarks/memory-baseline-arm64.txt │  benchmarks/memory-after-arm64.txt  │
+                         │              retained-B              │  retained-B   vs base               │
+TTLRetained/rounds=1-8                             1.251Mi ± 0%   1.251Mi ± 0%       ~ (p=0.912 n=10)
+TTLRetained/rounds=100-8                           27.66Mi ± 1%   27.44Mi ± 6%       ~ (p=0.105 n=10)
+geomean                                            5.883Mi        5.858Mi       -0.42%

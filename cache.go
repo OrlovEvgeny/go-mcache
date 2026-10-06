@@ -392,89 +392,35 @@ type BatchResult[K comparable, V any] struct {
 // GetBatch retrieves multiple values from the cache with optimized prefetching.
 // This is more efficient than calling Get in a loop, especially for large batches.
 func (c *Cache[K, V]) GetBatch(keys []K) *BatchResult[K, V] {
-	if c.closed.Load() {
-		return &BatchResult[K, V]{Keys: keys}
-	}
-
-	n := len(keys)
-	result := &BatchResult[K, V]{
-		Keys:   keys,
-		Values: make([]V, n),
-		Found:  make([]bool, n),
-		Hashes: make([]uint64, n),
-	}
-
-	if n == 0 {
-		return result
-	}
-
-	// Compute hashes
-	for i, key := range keys {
-		result.Hashes[i] = c.store.KeyHash(key)
-	}
-
-	// Use optimized batch get from store
-	req := &store.BatchRequest[K, V]{
-		Keys:   keys,
-		Hashes: result.Hashes,
-	}
-	c.store.GetBatch(req)
-
-	// Copy results and update policy
-	for i := 0; i < n; i++ {
-		if req.Found[i] {
-			result.Values[i] = req.Results[i].Value
-			result.Found[i] = true
-			c.recordAccess(result.Hashes[i])
-			c.metrics.incHit(result.Hashes[i])
-		} else {
-			c.metrics.incMiss(result.Hashes[i])
-		}
-	}
-
-	return result
+	return c.getBatch(keys, false)
 }
 
-// GetBatchOptimized retrieves multiple values with shard-order optimization.
-// Keys are processed in shard order for better cache locality, but results
-// are returned in the original key order.
+// GetBatchOptimized retrieves keys in shard order while preserving result order.
 func (c *Cache[K, V]) GetBatchOptimized(keys []K) *BatchResult[K, V] {
+	return c.getBatch(keys, true)
+}
+
+func (c *Cache[K, V]) getBatch(keys []K, ordered bool) *BatchResult[K, V] {
 	if c.closed.Load() {
 		return &BatchResult[K, V]{Keys: keys}
 	}
-
 	n := len(keys)
-	result := &BatchResult[K, V]{
-		Keys:   keys,
-		Values: make([]V, n),
-		Found:  make([]bool, n),
-		Hashes: make([]uint64, n),
-	}
-
+	result := &BatchResult[K, V]{Keys: keys, Values: make([]V, n), Found: make([]bool, n), Hashes: make([]uint64, n)}
 	if n == 0 {
 		return result
 	}
-
-	// Compute hashes
-	for i, key := range keys {
-		result.Hashes[i] = c.store.KeyHash(key)
+	for i, k := range keys {
+		result.Hashes[i] = c.store.KeyHash(k)
 	}
-
-	// Use shard-order batch get
-	entries, found := c.store.GetBatchByShardOrder(keys)
-
-	// Copy results and update policy
-	for i := 0; i < n; i++ {
-		if found[i] && entries[i] != nil {
-			result.Values[i] = entries[i].Value
-			result.Found[i] = true
-			c.recordAccess(result.Hashes[i])
-			c.metrics.incHit(result.Hashes[i])
+	c.store.GetBatchValues(keys, result.Hashes, result.Values, result.Found, ordered)
+	for i, h := range result.Hashes {
+		if result.Found[i] {
+			c.recordAccess(h)
+			c.metrics.incHit(h)
 		} else {
-			c.metrics.incMiss(result.Hashes[i])
+			c.metrics.incMiss(h)
 		}
 	}
-
 	return result
 }
 
@@ -646,11 +592,11 @@ func (c *Cache[K, V]) expirationWorker() {
 // stored expiration still matches the scheduled one.
 func (c *Cache[K, V]) removeExpired() {
 	c.clearMu.Lock()
-	defer c.clearMu.Unlock()
 
 	now := clock.NowNano()
 	expired := c.expiryWheel.Advance(now)
 
+	var removed []*store.Entry[K, V]
 	for _, item := range expired {
 		entry := c.store.DeleteIfExpired(item.Key, item.KeyHash, item.ExpireAt, now)
 		if entry == nil {
@@ -670,8 +616,12 @@ func (c *Cache[K, V]) removeExpired() {
 		c.metrics.incExpiration()
 
 		if c.config.OnExpire != nil {
-			c.config.OnExpire(entry.Key, entry.Value)
+			removed = append(removed, entry)
 		}
+	}
+	c.clearMu.Unlock()
+	for _, entry := range removed {
+		c.config.OnExpire(entry.Key, entry.Value)
 	}
 }
 
@@ -698,4 +648,3 @@ func (c *Cache[K, V]) shouldTrackAccess() bool {
 	}
 	return false
 }
-
